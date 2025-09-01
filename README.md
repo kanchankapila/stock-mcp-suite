@@ -12,6 +12,8 @@ End-to-end demo project:
 
 ## Architecture
 
+![Architecture](docs/architecture.svg)
+
 - High-level diagram with components and data flow: `docs/architecture.md`
 - The diagram is rendered with Mermaid; many IDEs and GitHub previewers support it.
 
