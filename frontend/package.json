@@ -1,0 +1,18 @@
+{
+  "name": "stock-mcp-frontend",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "vite"
+  },
+  "dependencies": {
+    "@angular/common": "^18.0.0",
+    "@angular/core": "^18.0.0",
+    "@angular/platform-browser": "^18.0.0",
+    "rxjs": "^7.8.1",
+    "zone.js": "^0.14.7"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.2",
+    "vite": "^5.4.6"
+  }
+}

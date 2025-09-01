@@ -1,0 +1,27 @@
+{
+  "name": "stock-mcp-server",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node --loader ts-node/esm src/index.ts",
+    "build": "tsc -p .",
+    "start": "node dist/index.js",
+    "db:check": "node --loader ts-node/esm scripts/db-check.ts",
+    "db:assert": "node --loader ts-node/esm scripts/db-assert.ts",
+    "alpha:fetch": "node --loader ts-node/esm scripts/alpha-fetch.ts AAPL"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "better-sqlite3": "^9.5.0",
+    "node-fetch": "^3.3.2",
+    "sentiment": "^5.0.2",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.6.2"
+  }
+}

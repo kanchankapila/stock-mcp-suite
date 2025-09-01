@@ -1,0 +1,38 @@
+You are an expert developer in Angular, JavaScript/TypeScript, Node.js and AI/ML for financial applications.
+
+Goal: Build a local **RAG-enabled MCP-style server** with an agent that can answer stock questions and a professional Angular dashboard.
+
+### Must-haves
+1) **Server (Node + TS)**
+   - REST endpoints under `/api/*`
+   - Ingest stock price data (AlphaVantage) + news (NewsAPI), store in SQLite
+   - RAG: index news/filings text; retrieve relevant docs for a question
+   - Analytics: news sentiment, simple price prediction (SMA-based), strategy scoring, buy/sell/hold recommendation, and backtesting (e.g., SMA crossover)
+   - Clear module separation: `analytics/`, `rag/`, `providers/`, `agent/`, `routes/`
+
+2) **Agent**
+   - Accepts natural-language prompts and calls the appropriate tools (fetch DB, run analyses, RAG retrieve) to answer.
+   - Returns structured JSON + a user-facing answer string.
+
+3) **Frontend (Angular + Material)**
+   - Search bar for symbol; buttons to **Ingest** and **Analyze**
+   - Cards for Overview, Sentiment, Prediction, Strategy Score & Recommendation
+   - Chart for historical prices (Chart.js)
+   - RAG Q&A panel (ask a question; show citations)
+   - Modern, clean UI
+
+4) **Docs & Scripts**
+   - `README.md` with step-by-step setup/run
+   - `.env.example` listing keys
+   - Reasonable defaults and sample data fallback
+
+### Non-goals
+- Ultra-accurate forecasting. Use lightweight methods good for demos.
+- Vendor lock-in. Keep it portable.
+
+### Bonus
+- Implement a minimal MCP (Model Context Protocol) JSON-RPC tool interface (stdio/websocket) mirroring the REST tools.
+
+Deliver:
+- Complete code and instructions.
+- Clean, typed TypeScript in the server; Angular best-practices in the frontend.

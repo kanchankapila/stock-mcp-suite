@@ -1,0 +1,9 @@
+{
+  "name": "stock-mcp-suite",
+  "private": true,
+  "scripts": {
+    "dev": "node scripts/start-all.js",
+    "start:all": "node scripts/start-all.js"
+  }
+}
+

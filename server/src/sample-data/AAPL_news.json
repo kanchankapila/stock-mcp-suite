@@ -1,0 +1,23 @@
+{
+  "status": "ok",
+  "articles": [
+    {
+      "title": "Apple unveils new AI features in iOS",
+      "description": "Analysts weigh in on revenue impact.",
+      "url": "https://example.com/aapl1",
+      "publishedAt": "2025-08-29T12:00:00Z"
+    },
+    {
+      "title": "Supply chain stabilizes for key components",
+      "description": "Vendors report improved lead times.",
+      "url": "https://example.com/aapl2",
+      "publishedAt": "2025-08-28T15:00:00Z"
+    },
+    {
+      "title": "Developers react to Apple SDK updates",
+      "description": "Positive sentiment around tooling.",
+      "url": "https://example.com/aapl3",
+      "publishedAt": "2025-08-27T09:30:00Z"
+    }
+  ]
+}

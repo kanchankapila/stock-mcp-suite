@@ -1,0 +1,21 @@
+# Global
+**/node_modules/
+**/dist/
+**/build/
+**/.cache/
+**/.tsbuildinfo
+**/.DS_Store
+**/coverage/
+**/*.log
+
+# Env and local data
+**/.env
+**/.env_*
+server/stock.db
+server/server.out.log
+server/server.err.log
+
+# Editor
+.vscode/
+.idea/
+
