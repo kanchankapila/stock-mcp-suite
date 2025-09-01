@@ -57,4 +57,23 @@ export class Api {
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   }
+
+  // RAG helpers
+  async ragIndex(namespace: string, urls: string[]) {
+    const res = await fetch(`${this.base}/api/rag/index`, { method:'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ namespace, urls }) });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async ragQuery(namespace: string, query: string, k=5, withAnswer=true) {
+    const res = await fetch(`${this.base}/api/rag/query`, { method:'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ namespace, query, k, withAnswer }) });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  ragStream(namespace: string, query: string, k=5) {
+    return fetch(`${this.base}/api/rag/stream`, { method:'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ namespace, query, k }) });
+  }
+
+  agentStream(q: string, symbol?: string) {
+    return fetch(`${this.base}/api/agent/stream`, { method:'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ q, symbol }) });
+  }
 }

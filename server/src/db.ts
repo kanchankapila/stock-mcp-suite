@@ -46,6 +46,16 @@ CREATE TABLE IF NOT EXISTS docs(
   terms TEXT     -- JSON array of {term, tf} for simple TF-IDF
 );
 
+-- Optional: Persistent RAG embeddings store (per-namespace)
+CREATE TABLE IF NOT EXISTS rag_embeddings(
+  ns TEXT,
+  id TEXT,
+  text TEXT,
+  metadata TEXT,
+  vector TEXT,
+  PRIMARY KEY(ns, id)
+);
+
 CREATE TABLE IF NOT EXISTS analyses(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   symbol TEXT,

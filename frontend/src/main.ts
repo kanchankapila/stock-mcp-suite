@@ -35,6 +35,41 @@ root.innerHTML = `
           <input id="agentq" placeholder="Ask about the stock (e.g., Why did AAPL move?)" style="flex:1" />
           <button id="ask">Ask</button>
         </div>
+        <div class="muted" style="margin-top:6px">
+          Examples: "Ingest BEL", "Analyze BEL", "Backtest BEL", "Resolve BEL", "DB stats BEL", "MC insight BEL",
+          "Index to RAG for BEL: https://example.com/a https://example.com/b", "Why did BEL move recently?"
+        </div>
+        <div class="grid-3" style="margin-top:8px">
+          <div class="card" style="background:#0e1320">
+            <div class="muted">Prompt History</div>
+            <div id="historyBox" class="mono" style="margin-top:6px; max-height:200px; overflow:auto; white-space:pre-wrap"></div>
+          </div>
+          <div class="card" style="background:#0e1320">
+            <div class="muted">RAG Q&A (stream)</div>
+            <div class="flex" style="margin-top:6px">
+              <input id="ragq" placeholder="Ask RAG (uses namespace = symbol)" style="flex:1" />
+              <button id="ragAsk">Ask</button>
+            </div>
+            <div class="muted" style="font-size:12px; margin-top:4px">Use "Index URLs" to add sources first.</div>
+            <pre id="ragStream" class="mono" style="white-space:pre-wrap; margin-top:6px"></pre>
+          </div>
+          <div class="card" style="background:#0e1320">
+            <div class="muted">RAG Index URLs</div>
+            <textarea id="ragUrls" placeholder="One or more URLs separated by spaces or newlines" style="width:100%; height:96px; background:#0b0f1c; color:#e8edf2; border:1px solid #253149; border-radius:8px; padding:8px"></textarea>
+            <button id="ragIndexBtn" style="margin-top:6px">Index URLs to Namespace (symbol)</button>
+            <div id="ragIndexStatus" class="muted" style="margin-top:6px"></div>
+          </div>
+        </div>
+        <div class="card" style="background:#0e1320; margin-top:8px">
+          <div class="muted">Live Quotes (WebSocket)</div>
+          <div class="flex" style="margin-top:6px">
+            <input id="wsSymbol" placeholder="Symbol to subscribe (e.g., BEL)" />
+            <button id="wsSub">Subscribe</button>
+            <button id="wsUnsub">Unsubscribe</button>
+          </div>
+          <div id="wsStatus" class="muted" style="margin-top:6px"></div>
+          <div id="wsQuotes" class="mono" style="margin-top:6px; max-height:160px; overflow:auto; white-space:pre-wrap"></div>
+        </div>
         <pre class="mono" id="agentAnswer" style="white-space:pre-wrap; margin-top:8px"></pre>
       </div>
     </div>
@@ -134,11 +169,147 @@ async function refresh(symbol: string) {
 
 document.getElementById('ingest')!.addEventListener('click', onIngest);
 document.getElementById('analyze')!.addEventListener('click', onAnalyze);
+const historyBox = document.getElementById('historyBox')!;
+function appendHistory(q: string, a: string) {
+  const prev = historyBox.textContent || '';
+  const line = `> ${q}\n${a}\n\n`;
+  historyBox.textContent = prev + line;
+  historyBox.scrollTop = historyBox.scrollHeight;
+}
+
 document.getElementById('ask')!.addEventListener('click', async ()=>{
   const q = (document.getElementById('agentq') as HTMLInputElement).value;
   const symbol = (document.getElementById('symbol') as HTMLInputElement).value.trim().toUpperCase();
+  // Quick prompt-level WS subscribe/unsubscribe
+  const low = q.toLowerCase();
+  if (/^subscribe\s+/.test(low)) {
+    const parts = q.split(/\s+/); const s = (parts[1]||symbol).toUpperCase();
+    if (s) { const w=ensureWs(); w!.send(JSON.stringify({ type:'subscribe', symbol: s })); appendHistory(q, `Subscribed ${s}`); }
+  } else if (/^unsubscribe\s+/.test(low)) {
+    const parts = q.split(/\s+/); const s = (parts[1]||symbol).toUpperCase();
+    if (s && ws) { ws.send(JSON.stringify({ type:'unsubscribe', symbol: s })); appendHistory(q, `Unsubscribed ${s}`); }
+  }
   const res = await api.agent(q, symbol);
   (document.getElementById('agentAnswer')!).textContent = res.answer;
+  appendHistory(q, res.answer || '');
+});
+
+// Chat: streaming agent answer
+// Simple second input path: if user types 'chat: ...' send via SSE
+document.getElementById('agentq')!.addEventListener('keydown', async (ev:any)=>{
+  if (ev.key === 'Enter' && ev.ctrlKey) {
+    const inp = ev.target as HTMLInputElement;
+    const q = inp.value;
+    const symbol = (document.getElementById('symbol') as HTMLInputElement).value.trim().toUpperCase();
+    const out = document.getElementById('agentAnswer')!;
+    out.textContent = '';
+    try {
+      const resp = await api.agentStream(q, symbol);
+      const reader = (resp.body as any).getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      let acc = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const parts = buf.split('\n\n');
+        buf = parts.pop() || '';
+        for (const p of parts) {
+          const line = p.trim(); if (!line) continue;
+          const evMatch = line.match(/^event: (\w+)/); const dataMatch = line.match(/data: (.*)$/m);
+          if (!evMatch || !dataMatch) continue; const evName = evMatch[1]; const data = JSON.parse(dataMatch[1]);
+          if (evName === 'chunk') { out.textContent += String(data); acc += String(data); }
+          if (evName === 'done') { appendHistory(q, acc); }
+        }
+      }
+    } catch (e:any) {
+      out.textContent = `Error: ${e.message}`;
+    }
+  }
+});
+
+// RAG streaming Q&A
+document.getElementById('ragAsk')!.addEventListener('click', async ()=>{
+  const symbol = (document.getElementById('symbol') as HTMLInputElement).value.trim().toUpperCase();
+  const q = (document.getElementById('ragq') as HTMLInputElement).value;
+  if (!symbol || !q) return;
+  const out = document.getElementById('ragStream')!;
+  out.textContent = '';
+  const resp = await api.ragStream(symbol, q, 5);
+  const reader = (resp.body as any).getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const parts = buf.split('\n\n');
+    buf = parts.pop() || '';
+    for (const p of parts) {
+      const line = p.trim();
+      if (!line) continue;
+      const evMatch = line.match(/^event: (\w+)/);
+      const dataMatch = line.match(/data: (.*)$/m);
+      if (evMatch && dataMatch) {
+        const ev = evMatch[1];
+        const data = JSON.parse(dataMatch[1]);
+        if (ev === 'answer') {
+          out.textContent += String(data || '');
+        }
+        if (ev === 'sources') {
+          out.textContent += `Sources loaded (k=${data.length}).\n`;
+        }
+      }
+    }
+  }
+});
+
+// RAG index URLs
+document.getElementById('ragIndexBtn')!.addEventListener('click', async ()=>{
+  const symbol = (document.getElementById('symbol') as HTMLInputElement).value.trim().toUpperCase();
+  if (!symbol) return;
+  const txt = (document.getElementById('ragUrls') as HTMLTextAreaElement).value;
+  const urls = txt.split(/\s+/).map(s=>s.trim()).filter(Boolean);
+  const status = document.getElementById('ragIndexStatus')!;
+  status.textContent = 'Indexing...';
+  try {
+    const res = await api.ragIndex(symbol, urls);
+    status.textContent = `Indexed ${res.added} chunk(s)`;
+  } catch (e:any) {
+    status.textContent = `Error: ${e.message}`;
+  }
+});
+
+// Live WS quotes via prompt
+let ws: WebSocket | null = null;
+const quotes = new Map<string,{price:number,time:string}>();
+function ensureWs() {
+  if (ws && ws.readyState === 1) return ws;
+  ws = new WebSocket('ws://localhost:4010/ws');
+  const status = document.getElementById('wsStatus')!;
+  const box = document.getElementById('wsQuotes')!;
+  ws.onopen = ()=>{ status.textContent = 'Connected'; };
+  ws.onclose = ()=>{ status.textContent = 'Closed'; };
+  ws.onerror = ()=>{ status.textContent = 'Error'; };
+  ws.onmessage = (ev)=>{
+    try {
+      const msg = JSON.parse(String(ev.data));
+      if (msg.type === 'quote') {
+        quotes.set(msg.symbol, { price: msg.price, time: msg.time });
+        box.textContent = Array.from(quotes.entries()).map(([s,v])=>`${s}: ${v.price} @ ${v.time}`).join('\n');
+      }
+    } catch {}
+  };
+  return ws;
+}
+document.getElementById('wsSub')!.addEventListener('click', ()=>{
+  const s = (document.getElementById('wsSymbol') as HTMLInputElement).value.trim().toUpperCase();
+  if (!s) return; const w = ensureWs(); w!.send(JSON.stringify({ type:'subscribe', symbol: s }));
+});
+document.getElementById('wsUnsub')!.addEventListener('click', ()=>{
+  const s = (document.getElementById('wsSymbol') as HTMLInputElement).value.trim().toUpperCase();
+  if (!s || !ws) return; ws.send(JSON.stringify({ type:'unsubscribe', symbol: s }));
 });
 
 document.getElementById('dbstatsBtn')!.addEventListener('click', async ()=>{

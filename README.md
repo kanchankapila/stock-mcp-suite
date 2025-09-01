@@ -10,6 +10,11 @@ End-to-end demo project:
 > - External market/news APIs are *optional*. If keys are not provided, the server falls back to sample data under `server/sample-data`.
 > - "MCP-style": this repo implements an MCP-inspired tool server over HTTP/JSON with clearly declared tools and schemas. If you need strict **Model Context Protocol** (JSON-RPC over stdio/websocket), you can adapt `server/src/mcp/mcp-server.ts` which exposes a minimal MCP JSON-RPC tool surface.
 
+## Architecture
+
+- High-level diagram with components and data flow: `docs/architecture.md`
+- The diagram is rendered with Mermaid; many IDEs and GitHub previewers support it.
+
 ## Quick Start
 
 ### 1) Prereqs
@@ -76,6 +81,36 @@ Examples
   - `TICKER_NEWS_KEY=name`, `TICKER_NEWS_SUFFIX=`
 - Use Moneycontrol mcsymbol BE03:
   - `TICKER_MC_KEY=mcsymbol`, `TICKER_MC_SUFFIX=`
+
+### RAG (LangChain)
+
+The server exposes a minimal LangChain-powered RAG to index external web pages and query them per-namespace (e.g., a stock symbol).
+
+Env (optional):
+- `RAG_STORE`: `memory` (default), `hnsw`, or `sqlite` for persistence.
+- `RAG_DIR`: base dir for `hnsw` persistence (default `./data/rag`).
+- `OPENAI_API_KEY`: enable OpenAI embeddings and LLM answers.
+- `OPENAI_EMBEDDING_MODEL` (default `text-embedding-3-small`).
+- `HUGGINGFACEHUB_API_KEY`: use HF embeddings when OpenAI is unavailable.
+- `HF_EMBEDDING_MODEL` (default `sentence-transformers/all-MiniLM-L6-v2`).
+- `OPENAI_MODEL` (default `gpt-4o-mini`).
+
+Routes:
+- `POST /api/rag/index`
+  - Body: `{ "namespace": "BEL", "urls": ["https://example.com/a", "https://example.com/b" ] }`
+  - Or: `{ "namespace":"BEL", "texts": [{"text":"some content", "metadata": {"source":"manual"}}] }`
+  - Response: `{ ok: true, added: <chunks> }`
+- `POST /api/rag/query`
+  - Body: `{ "namespace": "BEL", "query": "latest guidance?", "k": 5, "withAnswer": true }`
+  - Response with `withAnswer=true`: `{ ok:true, answer: string|null, sources: [{ text, metadata }] }`
+  - Without `withAnswer`: `{ ok:true, hits: [{ text, metadata }] }`
+
+Notes:
+- If `OPENAI_API_KEY` is not set, retrieval still works and returns contexts; `answer` will be `null`. With `HUGGINGFACEHUB_API_KEY`, embeddings fall back to HF.
+- Indexing uses a Cheerio web loader and a recursive splitter (1k chars, 150 overlap).
+- Persistence:
+  - `RAG_STORE=hnsw`: per-namespace HNSW index stored under `RAG_DIR/<ns>`.
+  - `RAG_STORE=sqlite`: embeddings stored in `rag_embeddings` SQLite table; retrieval computes cosine in-process.
 
 ### Live Prefetch and WebSocket
 The server runs a background prefetcher that batches Yahoo quote requests and writes to the DB. It adapts with backoff and falls back to Yahoo chart and then Stooq if needed. WebSocket polling for active subscriptions uses the same batching/backoff. Tunables (commented in `server/.env`):

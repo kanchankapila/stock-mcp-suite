@@ -17,7 +17,11 @@
     "better-sqlite3": "^9.5.0",
     "node-fetch": "^3.3.2",
     "sentiment": "^5.0.2",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "langchain": "^0.2.18",
+    "@langchain/openai": "^0.3.8",
+    "@langchain/community": "^0.3.13",
+    "cheerio": "^1.0.0-rc.12"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",

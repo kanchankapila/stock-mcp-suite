@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import { router as stockRoutes } from './routes/stocks.js';
+import { router as ragRoutes } from './routes/rag.js';
 import { attachMcp } from './mcp/mcp-server.js';
 import { attachLive } from './ws/live.js';
 import { logger } from './utils/logger.js';
@@ -28,6 +29,7 @@ app.use((req, res, next) => {
 app.get('/health', (_req, res)=> res.json({ ok:true }));
 
 app.use('/api', stockRoutes);
+app.use('/api/rag', ragRoutes);
 attachMcp(app);
 
 // Error handler (keep last)

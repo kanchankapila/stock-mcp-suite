@@ -10,7 +10,7 @@ import { predictNextClose } from '../analytics/predict.js';
 import { backtestSMA, scoreStrategy } from '../analytics/backtest.js';
 import { indexDocs } from '../rag/indexer.js';
 import { retrieve } from '../rag/retriever.js';
-import { agentAnswer } from '../agent/agent.js';
+import { agentAnswer, agentAnswerStream } from '../agent/agent.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { logger } from '../utils/logger.js';
 import { loadStocklist } from '../utils/stocklist.js';
@@ -155,6 +155,18 @@ router.get('/agent', asyncHandler(async (req, res) => {
   const symbol = req.query.symbol ? String(req.query.symbol) : undefined;
   const result = await agentAnswer(prompt, symbol);
   res.json(result);
+}));
+
+router.post('/agent/stream', asyncHandler(async (req, res) => {
+  const { q, symbol } = req.body || {};
+  if (!q) return res.status(400).json({ ok:false, error: 'q required' });
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+  const send = (ev: string, data: any) => { res.write(`event: ${ev}\n`); res.write(`data: ${JSON.stringify(data)}\n\n`); };
+  await agentAnswerStream(String(q), symbol ? String(symbol) : undefined, ({type, data})=> send(type, data));
+  res.end();
 }));
 
 // Resolve debug: show provider-specific identifiers for any input

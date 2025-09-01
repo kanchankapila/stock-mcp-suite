@@ -1,0 +1,11 @@
+import '../src/utils/logger.js';
+import '../src/db.js';
+console.log('boot-ok-db');
+await import('../src/providers/prefetch.js');
+console.log('boot-ok-prefetch');
+await import('../src/routes/stocks.js');
+console.log('boot-ok-routes-stocks');
+await import('../src/rag/langchain.js');
+console.log('boot-ok-langchain');
+await import('../src/routes/rag.js');
+console.log('boot-ok-routes-rag');
