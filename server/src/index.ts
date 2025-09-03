@@ -3,6 +3,8 @@ import express from 'express';
 import cors from 'cors';
 import { router as stockRoutes } from './routes/stocks.js';
 import { router as ragRoutes } from './routes/rag.js';
+import { router as externalRoutes } from './routes/external.js';
+import { startTrendlyneCookieAutoRefresh } from './providers/trendlyneHeadless.js';
 import { attachMcp } from './mcp/mcp-server.js';
 import { attachLive } from './ws/live.js';
 import { logger } from './utils/logger.js';
@@ -30,6 +32,7 @@ app.get('/health', (_req, res)=> res.json({ ok:true }));
 
 app.use('/api', stockRoutes);
 app.use('/api/rag', ragRoutes);
+app.use('/api/external', externalRoutes);
 attachMcp(app);
 
 // Error handler (keep last)
@@ -58,3 +61,6 @@ attachLive(server);
 
 // Background prefetcher for NSE tickers from stocklist.ts via Yahoo
 startYahooPrefetchFromStocklist();
+
+// Trendlyne cookie auto-refresh scheduler
+startTrendlyneCookieAutoRefresh();

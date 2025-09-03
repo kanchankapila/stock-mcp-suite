@@ -3,21 +3,27 @@ import { logger } from '../utils/logger.js';
 
 const NEWS_BASE = 'https://newsapi.org/v2/everything';
 
-export async function fetchNews(symbol: string, apiKey?: string) {
+export async function fetchNews(queryText: string, apiKey?: string) {
   try {
     if (!apiKey) {
-      logger.warn({ symbol }, 'newsapi_using_sample');
+      logger.warn({ q: queryText }, 'newsapi_using_sample');
       const sample = await import('../sample-data/AAPL_news.json', { assert: { type: 'json' } }) as any;
       return sample.default;
     }
-    const q = encodeURIComponent(symbol);
-    const url = `${NEWS_BASE}?q=${q}&sortBy=publishedAt&language=en&pageSize=25&apiKey=${apiKey}`;
-    logger.info({ symbol }, 'newsapi_fetch');
+    // Restrict to a recent window (default last N days) and rank by popularity
+    const days = Number(process.env.NEWS_FROM_DAYS || 5);
+    const now = new Date();
+    const to = now.toISOString().slice(0,10);
+    const fromDate = new Date(now.getTime() - days*24*60*60*1000).toISOString().slice(0,10);
+    const q = encodeURIComponent(queryText);
+    // Example shape: https://newsapi.org/v2/everything?q=$name&from=YYYY-MM-DD&sortBy=popularity&apiKey=API_KEY
+    const url = `${NEWS_BASE}?q=${q}&from=${fromDate}&to=${to}&sortBy=popularity&language=en&pageSize=25&apiKey=${apiKey}`;
+    logger.info({ q: queryText, from: fromDate, to, sortBy:'popularity' }, 'newsapi_fetch');
     const res = await fetch(url);
     if (!res.ok) throw new Error(`NewsAPI error: ${res.status}`);
     return res.json();
   } catch (err) {
-    logger.error({ err, symbol }, 'newsapi_failed');
+    logger.error({ err, q: queryText }, 'newsapi_failed');
     throw err;
   }
 }

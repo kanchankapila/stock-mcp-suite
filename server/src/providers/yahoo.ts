@@ -85,3 +85,15 @@ export async function fetchYahooQuotesBatch(symbols: string[]) {
     time: new Date((q.regularMarketTime || Math.floor(Date.now()/1000)) * 1000).toISOString()
   })).filter((x: any) => Number.isFinite(x.price) && x.price > 0);
 }
+
+// Fetch Yahoo quoteSummary modules for a symbol
+// Example modules: price,summaryDetail,assetProfile,financialData,defaultKeyStatistics
+export async function fetchYahooQuoteSummary(symbol: string, modules: string[] = ['price','summaryDetail','assetProfile','financialData','defaultKeyStatistics']) {
+  const m = encodeURIComponent(modules.join(','));
+  const path = `/v10/finance/quoteSummary/${encodeURIComponent(symbol)}?modules=${m}`;
+  logger.info({ symbol, modules }, 'yahoo_fetch_quote_summary');
+  const res = await fetchWithFallback(path);
+  if (!res.ok) throw new Error(`Yahoo quoteSummary error: ${res.status}`);
+  const json: any = await res.json();
+  return json?.quoteSummary || json;
+}

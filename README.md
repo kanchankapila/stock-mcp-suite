@@ -118,6 +118,106 @@ Notes:
 The server runs a background prefetcher that batches Yahoo quote requests and writes to the DB. It adapts with backoff and falls back to Yahoo chart and then Stooq if needed. WebSocket polling for active subscriptions uses the same batching/backoff. Tunables (commented in `server/.env`):
 
 - `PREFETCH_*`: batch sizes, intervals, backoff, fallbacks.
+
+## Env Vars Reference
+
+Below is a consolidated reference for `server/.env` grouped by feature. Most have sensible defaults and are optional. Do not commit secrets.
+
+Core
+- `PORT`: server port (default `4010`).
+- `LOG_LEVEL`: `debug` to enable verbose logs.
+
+External Keys (optional)
+- `ALPHA_VANTAGE_KEY`: AlphaVantage API key for prices fallback.
+- `NEWS_API_KEY`: NewsAPI key for headlines.
+
+Provider Ticker Mapping
+- `TICKER_YAHOO_KEY`/`TICKER_YAHOO_SUFFIX`: how to form Yahoo tickers (default: `symbol` + `.NS`).
+- `TICKER_NEWS_KEY`/`TICKER_NEWS_SUFFIX`: how to form NewsAPI queries (default: `name`).
+- `TICKER_ALPHA_KEY`/`TICKER_ALPHA_SUFFIX`: for AlphaVantage (default: `symbol`).
+- `TICKER_MC_KEY`/`TICKER_MC_SUFFIX`: Moneycontrol insights id (default: `mcsymbol`).
+- `STOCKLIST_PATH`: path to `server/stocklist.ts`.
+
+Prefetch (background jobs)
+- `PREFETCH_BATCH`, `PREFETCH_INTERVAL_MS`, `PREFETCH_PER_REQ_DELAY_MS`.
+- `PREFETCH_QUOTE_BATCH_SIZE`, `PREFETCH_BACKOFF_MULT`, `PREFETCH_BACKOFF_MAX_MS`, `PREFETCH_BACKOFF_DECAY_MS`.
+- `PREFETCH_USE_CHART_FALLBACK` (default true).
+- `PREFETCH_NEWS_ENABLE` (default true), `PREFETCH_MC_TECH_ENABLE` (default true), `PREFETCH_USE_STOOQ_FALLBACK` (default true).
+- News tuning: `PREFETCH_NEWS_BATCH`, `PREFETCH_NEWS_INTERVAL_MS`, `PREFETCH_NEWS_COOLDOWN_MS`.
+- News lookback: `NEWS_FROM_DAYS`.
+
+WebSocket Live (optional)
+- `LIVE_POLL_BASE_MS`, `LIVE_BACKOFF_MULT`, `LIVE_BACKOFF_MAX_MS`, `LIVE_BACKOFF_DECAY_MS`.
+- `LIVE_QUOTE_BATCH_SIZE`, `LIVE_INTER_CHUNK_MS`, `LIVE_USE_CHART_FALLBACK`.
+
+Ingest Fallbacks
+- `INGEST_USE_STOOQ_FALLBACK` (default true).
+
+Trendlyne (optional)
+- `TRENDLYNE_EMAIL`, `TRENDLYNE_PASSWORD`: credentials for headless cookie refresh.
+- `CHROME_EXECUTABLE_PATH`: path to Chrome/Chromium for Puppeteer (improves reliability).
+- Direct cookie: `TL_COOKIE` (e.g., `csrftoken=...; .trendlyne=...`) to bypass headless.
+- Provider endpoints: `TL_COOKIE_URLS` (comma-separated) if you host your own cookie provider.
+- Scheduler: `TL_COOKIE_REFRESH_ENABLE`, `TL_COOKIE_REFRESH_INTERVAL_HOURS`, `TL_COOKIE_REFRESH_BACKOFF_MS`, `TL_COOKIE_REFRESH_BACKOFF_MAX_MS`.
+- Cache file: `TL_COOKIE_CACHE_PATH` (where cookie is persisted).
+
+RAG / LLM (optional)
+- `RAG_STORE`: `memory` (default) or `file` (see code for additional stores).
+- `RAG_DIR`: base dir for file-backed store.
+- OpenAI: `OPENAI_API_KEY`, `OPENAI_MODEL` (default `gpt-4o-mini`), `OPENAI_EMBEDDING_MODEL` (default `text-embedding-3-small`).
+- Hugging Face: `HUGGINGFACEHUB_API_KEY`, `HF_EMBEDDING_MODEL` (default `sentence-transformers/all-MiniLM-L6-v2`).
+
+Example `.env`
+```
+PORT=4010
+LOG_LEVEL=debug
+
+# Optional: external APIs
+# ALPHA_VANTAGE_KEY=...
+# NEWS_API_KEY=...
+
+# Provider mapping
+TICKER_YAHOO_KEY=symbol
+TICKER_YAHOO_SUFFIX=.NS
+TICKER_NEWS_KEY=name
+TICKER_ALPHA_KEY=symbol
+TICKER_MC_KEY=mcsymbol
+STOCKLIST_PATH=server/stocklist.ts
+
+# Prefetch
+PREFETCH_BATCH=100
+PREFETCH_INTERVAL_MS=600000
+PREFETCH_PER_REQ_DELAY_MS=2000
+PREFETCH_QUOTE_BATCH_SIZE=250
+PREFETCH_BACKOFF_MULT=2
+PREFETCH_BACKOFF_MAX_MS=10000
+PREFETCH_BACKOFF_DECAY_MS=200
+PREFETCH_USE_CHART_FALLBACK=true
+PREFETCH_NEWS_ENABLE=true
+PREFETCH_NEWS_BATCH=10
+PREFETCH_NEWS_INTERVAL_MS=300000
+PREFETCH_NEWS_COOLDOWN_MS=900000
+PREFETCH_MC_TECH_ENABLE=true
+PREFETCH_USE_STOOQ_FALLBACK=true
+NEWS_FROM_DAYS=5
+
+# Trendlyne (choose one: credentials for headless, or direct cookie)
+# TRENDLYNE_EMAIL=...
+# TRENDLYNE_PASSWORD=...
+# CHROME_EXECUTABLE_PATH=C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe
+# TL_COOKIE="csrftoken=...; .trendlyne=..."
+TL_COOKIE_REFRESH_ENABLE=true
+TL_COOKIE_REFRESH_INTERVAL_HOURS=11
+TL_COOKIE_REFRESH_BACKOFF_MS=60000
+TL_COOKIE_REFRESH_BACKOFF_MAX_MS=21600000
+
+# RAG / LLM
+# OPENAI_API_KEY=...
+OPENAI_MODEL=gpt-4o-mini
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+# HUGGINGFACEHUB_API_KEY=...
+HF_EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+```
 - `LIVE_*`: polling cadence, batch size, fallbacks.
 - `INGEST_USE_STOOQ_FALLBACK`: enable Stooq fallback during ingest.
 

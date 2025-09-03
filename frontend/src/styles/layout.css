@@ -1,0 +1,72 @@
+html, body { height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: Inter, Roboto, system-ui, -apple-system, Segoe UI, Arial, sans-serif;
+}
+
+.app-container { max-width: 1280px; margin: 0 auto; padding: 16px 24px; }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 24px;
+  grid-auto-flow: row dense;
+  align-items: start;
+  align-content: start;
+}
+@media (max-width: 1199px) { .grid { grid-template-columns: repeat(8, 1fr); gap: 16px; } }
+@media (max-width: 899px)  { .grid { grid-template-columns: repeat(4, 1fr); gap: 16px; } }
+@media (max-width: 599px)  { .grid { grid-template-columns: repeat(2, 1fr); gap: 12px; } }
+
+.col-span-12 { grid-column: span 12; }
+.col-span-6  { grid-column: span 6; }
+.col-span-4  { grid-column: span 4; }
+.col-span-3  { grid-column: span 3; }
+
+@media (max-width: 899px) {
+  .md\:col-span-8 { grid-column: span 8; }
+  .md\:col-span-4 { grid-column: span 4; }
+}
+@media (max-width: 599px) {
+  .sm\:col-span-2 { grid-column: span 2; }
+  .sm\:col-span-1 { grid-column: span 1; }
+}
+
+.card {
+  background: var(--surface);
+  color: var(--text);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--elev-1);
+  display: block;
+  overflow: hidden;
+  contain: layout paint;
+  transition: box-shadow 180ms ease, transform 180ms ease;
+}
+.card:hover, .card:focus-within { box-shadow: var(--elev-2); }
+
+/* Focus visibility */
+:where(button, a, input, select, textarea, [tabindex]) :focus { outline: none; }
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* Utility grids for card content (avoid nested .card layout issues) */
+.tech-grid, .stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+@media (max-width: 899px)  { .tech-grid, .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 599px)  { .tech-grid, .stat-grid { grid-template-columns: 1fr; } }
+
+.tech-box, .stat-box {
+  background: var(--surface);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  box-shadow: var(--elev-1);
+}
+.tech-box .muted, .stat-box .muted { color: var(--text-muted); font-size: 12px; }

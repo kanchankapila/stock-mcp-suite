@@ -4,8 +4,8 @@ import { fileURLToPath } from 'url';
 import { fetchYahooQuotesBatch, fetchYahooDaily, parseYahooDaily } from './yahoo.js';
 import { fetchStooqDaily } from './stooq.js';
 import { fetchNews, parseNews } from '../providers/news.js';
-import { fetchMcInsights } from '../providers/moneycontrol.js';
-import { insertPriceRow, upsertStock, insertNewsRow } from '../db.js';
+import { fetchMcInsights, fetchMcTech } from '../providers/moneycontrol.js';
+import { insertPriceRow, upsertStock, insertNewsRow, upsertMcTech } from '../db.js';
 import { logger } from '../utils/logger.js';
 import { sentimentScore } from '../analytics/sentiment.js';
 import { loadStocklist } from '../utils/stocklist.js';
@@ -115,7 +115,7 @@ export function startYahooPrefetchFromStocklist() {
         if (USE_CHART_FALLBACK) {
           for (const s of chunk) {
             try {
-              const chart = await fetchYahooDaily(s, '1d', '1m');
+              const chart = await fetchYahooDaily(s, '1d', '30m');
               const rows = parseYahooDaily(s, chart);
               const last = rows[rows.length - 1];
               if (last) {
@@ -162,8 +162,15 @@ export function startYahooPrefetchFromStocklist() {
     } else {
       const NEWS_BATCH = Number(process.env.PREFETCH_NEWS_BATCH || 10);
       const NEWS_INTERVAL_MS = Number(process.env.PREFETCH_NEWS_INTERVAL_MS || 300_000); // 5 min
+      const NEWS_COOLDOWN_MS = Number(process.env.PREFETCH_NEWS_COOLDOWN_MS || 900_000); // 15 min on 429
+      let NEWS_COOLDOWN_UNTIL = 0;
       let nidx = 0;
       const runNews = async () => {
+        // backoff window if rate limited earlier
+        if (Date.now() < NEWS_COOLDOWN_UNTIL) {
+          logger.warn({ until: new Date(NEWS_COOLDOWN_UNTIL).toISOString() }, 'prefetch_news_cooldown_active');
+          return;
+        }
         const end = Math.min(nidx + NEWS_BATCH, tickers.length);
         const slice = tickers.slice(nidx, end);
         if (!slice.length) { nidx = 0; return; }
@@ -188,9 +195,29 @@ export function startYahooPrefetchFromStocklist() {
                 const sent = sentimentScore([`${title}. ${summary}`]);
                 insertNewsRow({ id, symbol: ysym, date, title, summary, url: 'https://www.moneycontrol.com/', sentiment: sent });
               }
+              // Moneycontrol technicals (optional prefetch)
+              if (String(process.env.PREFETCH_MC_TECH_ENABLE || 'true') === 'true') {
+                try {
+                  const [td, tw, tm] = await Promise.all([
+                    fetchMcTech(mcid, 'D'), fetchMcTech(mcid, 'W'), fetchMcTech(mcid, 'M')
+                  ]);
+                  if (td) upsertMcTech(ysym, 'D', td);
+                  if (tw) upsertMcTech(ysym, 'W', tw);
+                  if (tm) upsertMcTech(ysym, 'M', tm);
+                } catch (e3) {
+                  logger.warn({ err: e3, symbol: ysym }, 'prefetch_mc_tech_failed');
+                }
+              }
             }
           } catch (err) {
-            logger.error({ err, symbol: ysym }, 'prefetch_news_failed');
+            const msg = String((err as any)?.message || err);
+            if (/429/.test(msg)) {
+              NEWS_COOLDOWN_UNTIL = Date.now() + NEWS_COOLDOWN_MS;
+              logger.warn({ symbol: ysym, err: msg, cooldownMs: NEWS_COOLDOWN_MS }, 'prefetch_news_rate_limited');
+              break; // break out of the inner loop; cooldown will skip upcoming runs
+            } else {
+              logger.error({ err, symbol: ysym }, 'prefetch_news_failed');
+            }
           }
           await sleep(Math.max(100, BASE_DELAY_MS));
         }

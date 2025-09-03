@@ -1,9 +1,9 @@
 import { Router } from 'express';
-import db, { upsertStock, insertPriceRow, insertNewsRow, listPrices, listNews, saveAnalysis } from '../db.js';
+import db, { upsertStock, insertPriceRow, insertNewsRow, listPrices, listNews, saveAnalysis, getMcTech, upsertMcTech } from '../db.js';
 import { fetchDailyTimeSeries, parseAlphaDaily } from '../providers/alphaVantage.js';
 import { fetchNews, parseNews } from '../providers/news.js';
-import { fetchMcInsights } from '../providers/moneycontrol.js';
-import { fetchYahooDaily, parseYahooDaily } from '../providers/yahoo.js';
+import { fetchMcInsights, fetchMcTech } from '../providers/moneycontrol.js';
+import { fetchYahooDaily, parseYahooDaily, fetchYahooQuoteSummary, fetchYahooQuote } from '../providers/yahoo.js';
 import { fetchStooqDaily } from '../providers/stooq.js';
 import { sentimentScore } from '../analytics/sentiment.js';
 import { predictNextClose } from '../analytics/predict.js';
@@ -215,6 +215,25 @@ router.get('/stocks/:symbol/mc-insight', asyncHandler(async (req, res) => {
   res.json({ ok: true, data: mc });
 }));
 
+// Moneycontrol Technical Indicators for a symbol and frequency (D/W/M)
+router.get('/stocks/:symbol/mc-tech', asyncHandler(async (req, res) => {
+  const yahooSymbol = String(req.params.symbol || '').toUpperCase();
+  const freq = String(req.query.freq || 'D').toUpperCase() as 'D'|'W'|'M';
+  // DB cache first
+  try {
+    const cached = getMcTech(yahooSymbol, (freq === 'W' || freq === 'M') ? freq : 'D');
+    if (cached) return res.json({ ok: true, data: cached });
+  } catch {}
+  const base = yahooSymbol.includes('.') ? yahooSymbol.split('.')[0] : yahooSymbol;
+  const mcid = resolveTicker(base, 'mc');
+  if (!mcid) return res.status(404).json({ ok: false, error: 'mcsymbol not found for stock' });
+  const tech = await fetchMcTech(mcid, (freq === 'W' || freq === 'M') ? freq : 'D');
+  if (!tech) return res.status(502).json({ ok: false, error: 'Moneycontrol tech fetch failed' });
+  // Cache
+  try { upsertMcTech(yahooSymbol, tech.freq, tech); } catch {}
+  res.json({ ok: true, data: tech });
+}));
+
 // DB stats for a symbol: counts and date ranges
 router.get('/stocks/:symbol/db', asyncHandler((req, res) => {
   const symbol = req.params.symbol.toUpperCase();
@@ -256,4 +275,20 @@ router.post('/yahoo/ingest/:symbol', asyncHandler(async (req, res) => {
   rows.forEach(r => insertPriceRow(r));
   upsertStock(symbol, symbol);
   res.json({ ok:true, insertedPrices: rows.length, source: 'yahoo' });
+}));
+
+// Yahoo: fetch quote, chart, and quoteSummary modules in one call
+router.get('/stocks/:symbol/yahoo-full', asyncHandler(async (req, res) => {
+  const input = String(req.params.symbol || '').toUpperCase();
+  const symbol = resolveTicker(input, 'yahoo');
+  const range = String(req.query.range || '1y');
+  const interval = String(req.query.interval || '1d');
+  const modules = String(req.query.modules || 'price,summaryDetail,assetProfile,financialData,defaultKeyStatistics,earnings,recommendationTrend,balanceSheetHistory,cashflowStatementHistory,secFilings')
+                    .split(',').map(s=>s.trim()).filter(Boolean);
+  const [quote, chart, summary] = await Promise.all([
+    fetchYahooQuote(symbol).catch(()=>null),
+    fetchYahooDaily(symbol, range, interval).catch(()=>null),
+    fetchYahooQuoteSummary(symbol, modules).catch(()=>null)
+  ]);
+  res.json({ ok: true, data: { symbol, quote, chart, summary } });
 }));

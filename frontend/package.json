@@ -2,7 +2,9 @@
   "name": "stock-mcp-frontend",
   "version": "1.0.0",
   "scripts": {
-    "start": "vite"
+    "start": "vite --open",
+    "dev": "vite --open",
+    "dev:host": "vite --host --open"
   },
   "dependencies": {
     "@angular/common": "^18.0.0",

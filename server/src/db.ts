@@ -39,6 +39,15 @@ CREATE TABLE IF NOT EXISTS news(
   sentiment REAL
 );
 
+-- Moneycontrol Technicals cache
+CREATE TABLE IF NOT EXISTS mc_tech(
+  symbol TEXT,
+  freq TEXT,    -- 'D' | 'W' | 'M'
+  data TEXT,    -- JSON payload as returned by provider
+  updated_at TEXT,
+  PRIMARY KEY(symbol, freq)
+);
+
 CREATE TABLE IF NOT EXISTS docs(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   symbol TEXT,
@@ -136,6 +145,28 @@ export function listNews(symbol: string, limit: number = 30) {
     return stmt.all(symbol, limit);
   } catch (err) {
     logger.error({ err, symbol, limit }, 'news_query_failed');
+    throw err;
+  }
+}
+
+export function upsertMcTech(symbol: string, freq: 'D'|'W'|'M', data: any) {
+  try {
+    const stmt = db.prepare(`INSERT INTO mc_tech(symbol,freq,data,updated_at) VALUES(?,?,?,?)
+      ON CONFLICT(symbol,freq) DO UPDATE SET data=excluded.data, updated_at=excluded.updated_at`);
+    stmt.run(symbol, freq, JSON.stringify(data), new Date().toISOString());
+  } catch (err) {
+    logger.error({ err, symbol, freq }, 'mc_tech_upsert_failed');
+    throw err;
+  }
+}
+
+export function getMcTech(symbol: string, freq: 'D'|'W'|'M'): any | null {
+  try {
+    const row = db.prepare(`SELECT data FROM mc_tech WHERE symbol=? AND freq=?`).get(symbol, freq);
+    if (!row) return null;
+    try { return JSON.parse(String(row.data)); } catch { return null; }
+  } catch (err) {
+    logger.error({ err, symbol, freq }, 'mc_tech_get_failed');
     throw err;
   }
 }

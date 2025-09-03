@@ -3,23 +3,80 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Stock RAG MCP Dashboard</title>
+    <title>Stock RAG MCP Dashboard</title>\\n <link rel=\stylesheet\ href=\/src/styles/tokens.css\ />\\n <link rel=\stylesheet\ href=\/src/styles/layout.css\ />
     <style>
+      * { box-sizing: border-box; }
+      :root {
+        --bg: #f7f8fb;
+        --panel: #ffffff;
+        --panel-2: #fbfcff;
+        --border: #e5e7eb;
+        --border-2: #d1d5db;
+        --text: #1f2937;
+        --muted: #6b7280;
+        --brand: #3b82f6;
+        --brand-2: #8b5cf6;
+        --success: #16a34a;
+        --warn: #d97706;
+        --danger: #ef4444;
+      }
       :root { font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif; }
-      body { margin: 0; background: #0b0d12; color: #e8edf2; }
-      header { padding: 16px 24px; border-bottom: 1px solid #1b2230; display: flex; align-items: center; gap: 12px; }
-      .badge { background: #1b2230; border-radius: 999px; padding: 4px 10px; font-size: 12px; }
-      .container { padding: 24px; max-width: 1200px; margin: 0 auto; }
-      .row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-      .card { background: #121722; border: 1px solid #1b2230; border-radius: 16px; padding: 16px; box-shadow: 0 8px 24px rgba(0,0,0,0.25); }
-      input, button { border-radius: 10px; border: 1px solid #253149; background: #0e1320; color: #e8edf2; padding: 10px 12px; }
-      button { cursor: pointer; }
-      .muted { color: #9fb0c3; font-size: 12px; }
-      .stat { font-size: 22px; font-weight: 600; }
-      .flex { display:flex; gap:8px; align-items:center; }
-      .grid-3 { display:grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+      body {
+        margin: 0;
+        color: var(--text);
+        background: radial-gradient(1200px 600px at 80% -10%, #eef2ff 0%, transparent 60%), var(--bg);
+      }
+      header {
+        padding: 16px 24px;
+        background: linear-gradient(90deg, #ffffff, #f7faff 60%);
+        border-bottom: 1px solid var(--border);
+        display: flex; align-items: center; gap: 12px;
+      }
+      .badge {
+        background: linear-gradient(135deg, var(--brand) 0%, var(--brand-2) 100%);
+        color: #ffffff;
+        font-weight: 600;
+        border-radius: 999px; padding: 6px 12px; font-size: 12px;
+        box-shadow: 0 6px 20px rgba(59,130,246,0.25);
+      }
+      .container { padding: 24px; max-width: 1400px; margin: 0 auto; }
+      .row {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+        gap: 18px;
+        align-items: start;
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 16px; padding: 16px;
+        box-shadow: 0 8px 18px rgba(31,41,55,0.08);
+        transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+      }
+      .card:hover { transform: translateY(-1px); border-color: var(--border-2); box-shadow: 0 10px 22px rgba(31,41,55,0.12); }
+      .card > .muted:first-child { text-transform: uppercase; letter-spacing: .06em; font-weight: 600; color: var(--muted); }
+      .card .muted strong { color: var(--text); }
+
+      input, select, textarea, button {
+        border-radius: 10px; border: 1px solid var(--border-2); background: var(--panel-2); color: var(--text); padding: 10px 12px;
+      }
+      select { padding: 9px 12px; }
+      textarea { resize: vertical; }
+      button { cursor: pointer; background: linear-gradient(180deg, #ffffff, #f4f6fb); border-color: var(--border-2); }
+      button:hover { border-color: var(--brand); box-shadow: 0 0 0 2px rgba(59,130,246,0.12) inset; }
+      .btn-sm { padding: 6px 10px; font-size: 12px; border-radius: 8px; }
+      .btn-sm:hover { border-color: var(--brand-2); box-shadow: 0 0 0 2px rgba(139,92,246,0.15) inset; }
+
+      .muted { color: var(--muted); font-size: 12px; }
+      .stat { font-size: 24px; font-weight: 700; color: #0f172a; }
+      .flex { display:flex; gap:10px; align-items:center; flex-wrap: wrap; }
+      .grid-3 { display:grid; grid-template-columns: repeat(3, 1fr); gap: 14px; align-items: start; }
       .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-      a { color: #72a7ff; }
+      a { color: #1d4ed8; }
+      a:hover { color: #2563eb; }
+
+      /* Ensure nested cards use light theme; override any inline dark bg */
+      .card .card { background: var(--panel-2) !important; border-color: var(--border); box-shadow: 0 4px 10px rgba(31,41,55,0.06); }
     </style>
   </head>
   <body>
@@ -31,3 +88,6 @@
     <script type="module" src="/main.ts"></script>
   </body>
 </html>
+
+
+

@@ -1,5 +1,8 @@
 export class Api {
-  constructor(private base = 'http://localhost:4010') {}
+  // Prefer Vite env var; otherwise use relative path so Vite proxy can handle it
+  constructor(
+    private base = (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_API_BASE) || ''
+  ) {}
 
   async ingest(symbol: string) {
     const res = await fetch(`${this.base}/api/ingest/${symbol}`, { method:'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({}) });
@@ -54,6 +57,99 @@ export class Api {
 
   async mcInsight(symbol: string) {
     const res = await fetch(`${this.base}/api/stocks/${symbol}/mc-insight`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+
+  async mcTech(symbol: string, freq: 'D'|'W'|'M'='D') {
+    const url = new URL(`${this.base}/api/stocks/${symbol}/mc-tech`);
+    url.searchParams.set('freq', freq);
+    const res = await fetch(url.toString());
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+
+  async yahooFull(symbol: string, range='1y', interval='1d', modules='price,summaryDetail,assetProfile,financialData,defaultKeyStatistics') {
+    const url = new URL(`${this.base}/api/stocks/${symbol}/yahoo-full`);
+    url.searchParams.set('range', range);
+    url.searchParams.set('interval', interval);
+    url.searchParams.set('modules', modules);
+    const res = await fetch(url.toString());
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+
+  // External data
+  async etIndices() {
+    const res = await fetch(`${this.base}/api/external/et/indices`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async etSectorPerformance() {
+    const res = await fetch(`${this.base}/api/external/et/sector-performance`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async etIndexConstituents(indexId: string, pagesize=200, pageno=1) {
+    const url = new URL(`${this.base}/api/external/et/index-constituents`);
+    url.searchParams.set('indexId', indexId);
+    url.searchParams.set('pagesize', String(pagesize));
+    url.searchParams.set('pageno', String(pageno));
+    const res = await fetch(url.toString());
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async mcPriceVolume(scId: string) {
+    const url = new URL(`${this.base}/api/external/mc/price-volume`);
+    url.searchParams.set('scId', scId);
+    const res = await fetch(url.toString());
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async mcStockHistory(symbol: string, resolution='1D', from?: number, to?: number) {
+    const url = new URL(`${this.base}/api/external/mc/stock-history`);
+    url.searchParams.set('symbol', symbol);
+    url.searchParams.set('resolution', resolution);
+    if (from) url.searchParams.set('from', String(from));
+    if (to) url.searchParams.set('to', String(to));
+    const res = await fetch(url.toString());
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async tickertapeMmi() {
+    const res = await fetch(`${this.base}/api/external/tickertape/mmi`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async marketsMojoValuation() {
+    const res = await fetch(`${this.base}/api/external/marketsmojo/valuation`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+
+  // Moneycontrol quick bundle
+  async mcQuick(symbol: string, fid?: string) {
+    const url = new URL(`${this.base}/api/external/mc/quick`);
+    url.searchParams.set('symbol', symbol);
+    if (fid) url.searchParams.set('fid', fid);
+    const res = await fetch(url.toString());
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+
+  // Trendlyne
+  async tlAdvTechBySymbol(symbol: string) {
+    const url = new URL(`${this.base}/api/external/trendlyne/adv-tech`);
+    url.searchParams.set('symbol', symbol);
+    const res = await fetch(url.toString());
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async tlDerivatives(date: string, tlid?: string) {
+    const url = new URL(`${this.base}/api/external/trendlyne/derivatives`);
+    url.searchParams.set('date', date);
+    if (tlid) url.searchParams.set('tlid', tlid);
+    const res = await fetch(url.toString());
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   }
