@@ -4,6 +4,8 @@
   "scripts": {
     "dev": "node scripts/start-all.js",
     "start:all": "node scripts/start-all.js"
+  },
+  "dependencies": {
+    "chart.js": "^4.5.0"
   }
 }
-

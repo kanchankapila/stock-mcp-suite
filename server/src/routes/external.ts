@@ -4,6 +4,7 @@ import { etGetAllIndices, etSectorPerformance, etIndexConstituents, mcPriceVolum
 import { tlAdvTechnical, tlSmaChart, tlDerivativeBuildup, tlHeatmap, getTrendlyneCookieStatus } from '../providers/trendlyne.js';
 import { refreshTrendlyneCookieHeadless } from '../providers/trendlyneHeadless.js';
 import { resolveTicker, findStockEntry } from '../utils/ticker.js';
+import { fetchMcTech } from '../providers/moneycontrol.js';
 
 export const router = Router();
 
@@ -28,19 +29,27 @@ router.get('/et/index-constituents', asyncHandler(async (req, res) => {
 }));
 
 router.get('/mc/price-volume', asyncHandler(async (req, res) => {
-  const scId = String(req.query.scId || '');
-  if (!scId) return res.status(400).json({ ok:false, error:'scId required' });
-  const data = await mcPriceVolume(scId);
+  const input = String(req.query.symbol || '').toUpperCase();
+  if (!input) return res.status(400).json({ ok:false, error:'symbol required' });
+  const base = input.includes('.') ? input.split('.')[0] : input;
+  const entry = findStockEntry(base);
+  const mcs = entry?.mcsymbol;
+  if (!mcs) return res.status(404).json({ ok:false, error:`mcsymbol not found for ${input}` });
+  const data = await mcPriceVolume(mcs);
   res.json({ ok: true, data });
 }));
 
 router.get('/mc/stock-history', asyncHandler(async (req, res) => {
-  const symbol = String(req.query.symbol || '');
-  if (!symbol) return res.status(400).json({ ok:false, error:'symbol required' });
+  const input = String(req.query.symbol || '').toUpperCase();
+  if (!input) return res.status(400).json({ ok:false, error:'symbol required' });
+  const base = input.includes('.') ? input.split('.')[0] : input;
+  const entry = findStockEntry(base);
+  const mcs = entry?.mcsymbol;
+  if (!mcs) return res.status(404).json({ ok:false, error:`mcsymbol not found for ${input}` });
   const resolution = String(req.query.resolution || '1D');
   const from = req.query.from ? Number(req.query.from) : undefined;
   const to = req.query.to ? Number(req.query.to) : undefined;
-  const data = await mcStockHistory(symbol, resolution, from, to);
+  const data = await mcStockHistory(mcs, resolution, from, to);
   res.json({ ok: true, data });
 }));
 
@@ -50,7 +59,7 @@ router.get('/mc/quick', asyncHandler(async (req, res) => {
   if (!input) return res.status(400).json({ ok:false, error:'symbol required' });
   const base = input.includes('.') ? input.split('.')[0] : input;
   const entry = findStockEntry(base);
-  const mcs = entry?.mcsymbol || resolveTicker(base, 'mc');
+  const mcs = entry?.mcsymbol;
   if (!mcs) return res.status(404).json({ ok:false, error:'mcsymbol not found' });
   const [chart, forecast, rD, rW, rM] = await Promise.all([
     mcChartInfo(mcs, '1D').catch(()=>null),
@@ -63,6 +72,18 @@ router.get('/mc/quick', asyncHandler(async (req, res) => {
   const fid = String(req.query.fid || '');
   const expiries = fid ? await mcFnoExpiries(fid).catch(()=>null) : null;
   res.json({ ok:true, data: { mcsymbol: mcs, chart, forecast, expiries, rsi: { D: rD, W: rW, M: rM } } });
+}));
+
+router.get('/mc/tech', asyncHandler(async (req, res) => {
+  const input = String(req.query.symbol || '').toUpperCase();
+  if (!input) return res.status(400).json({ ok:false, error:'symbol required' });
+  const base = input.includes('.') ? input.split('.')[0] : input;
+  const entry = findStockEntry(base);
+  const mcs = entry?.mcsymbol;
+  if (!mcs) return res.status(404).json({ ok:false, error:`mcsymbol not found for ${input}` });
+  const freq = String(req.query.freq || 'D') as 'D'|'W'|'M';
+  const data = await fetchMcTech(mcs, freq);
+  res.json({ ok: true, data });
 }));
 
 // Trendlyne advanced technicals and SMA chart by tlid or symbol

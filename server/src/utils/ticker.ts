@@ -52,14 +52,25 @@ export function resolveTicker(input: string, provider: Provider): string {
       base = String(pref);
     } else {
       // Generic fallback order: prefer symbol, then mcsymbol, then other identifiers
-      base = String(
-        (isValid(e.symbol) && e.symbol) ||
-        (isValid(e.mcsymbol) && e.mcsymbol) ||
-        (isValid(e.name) && e.name) ||
-        (isValid(e.isin) && e.isin) ||
-        (isValid(e.tlid) && e.tlid) ||
-        input
-      );
+      if (provider === 'mc') {
+        base = String(
+          (isValid(e.mcsymbol) && e.mcsymbol) ||
+          (isValid(e.symbol) && e.symbol) ||
+          (isValid(e.name) && e.name) ||
+          (isValid(e.isin) && e.isin) ||
+          (isValid(e.tlid) && e.tlid) ||
+          input
+        );
+      } else {
+        base = String(
+          (isValid(e.symbol) && e.symbol) ||
+          (isValid(e.mcsymbol) && e.mcsymbol) ||
+          (isValid(e.name) && e.name) ||
+          (isValid(e.isin) && e.isin) ||
+          (isValid(e.tlid) && e.tlid) ||
+          input
+        );
+      }
     }
   }
   const t = normalize(String(base));

@@ -53,6 +53,10 @@ function resolveStocklistPath(): string | null {
 }
 
 export function startYahooPrefetchFromStocklist() {
+  if (String(process.env.PREFETCH_DISABLED || 'false') === 'true') {
+    logger.warn('prefetch_disabled_by_env_var');
+    return;
+  }
   const stocklistPath = resolveStocklistPath();
   if (!stocklistPath) {
     logger.error('stocklist_not_found');

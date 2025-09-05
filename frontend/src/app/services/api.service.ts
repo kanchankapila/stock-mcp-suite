@@ -129,7 +129,7 @@ export class Api {
 
   // Moneycontrol quick bundle
   async mcQuick(symbol: string, fid?: string) {
-    const url = new URL(`${this.base}/api/external/mc/quick`);
+    const url = new URL(`${this.base}/api/external/mc/quick`, window.location.origin);
     url.searchParams.set('symbol', symbol);
     if (fid) url.searchParams.set('fid', fid);
     const res = await fetch(url.toString());
@@ -150,6 +150,30 @@ export class Api {
     url.searchParams.set('date', date);
     if (tlid) url.searchParams.set('tlid', tlid);
     const res = await fetch(url.toString());
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+
+  // AlphaVantage (via stocks route)
+  async alphaVantageIngest(symbol: string) {
+    const res = await fetch(`${this.base}/api/stocks/alpha/ingest/${symbol}`, { method:'POST' });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+
+  // Yahoo specific routes
+  async yahooIngest(symbol: string, range='1y', interval='1d') {
+    const url = new URL(`${this.base}/api/stocks/yahoo/ingest/${symbol}`);
+    url.searchParams.set('range', range);
+    url.searchParams.set('interval', interval);
+    const res = await fetch(url.toString(), { method:'POST' });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+
+  // Resolve ticker mapping
+  async resolveTicker(input: string) {
+    const res = await fetch(`${this.base}/api/resolve/${input}`);
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   }
