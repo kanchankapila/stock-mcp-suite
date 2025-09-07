@@ -15,14 +15,17 @@ async function fetchWithFallback(path: string) {
   for (const base of Y_BASES) {
     const url = `${base}${path}`;
     try {
+      logger.info({ url }, 'yahoo_fetch_start');
       const res = await fetch(url, { headers: Y_HEADERS });
-      if (res.ok) return res;
+      if (res.ok) { logger.info({ url, status: res.status }, 'yahoo_fetch_ok'); return res; }
       // If unauthorized/forbidden, try next base
       if (res.status === 401 || res.status === 403) {
         lastErr = new Error(`Yahoo error: ${res.status}`);
+        logger.warn({ url, status: res.status }, 'yahoo_fetch_unauthorized');
         continue;
       }
       // other errors: throw immediately
+      logger.error({ url, status: res.status }, 'yahoo_fetch_failed');
       throw new Error(`Yahoo error: ${res.status}`);
     } catch (err) {
       lastErr = err;

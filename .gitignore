@@ -14,7 +14,7 @@
 server/stock.db*
 server/server.out.log
 server/server.err.log
-
+server/server/.rag/*
 # Editor
 .vscode/
 .idea/

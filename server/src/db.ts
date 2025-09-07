@@ -39,6 +39,9 @@ CREATE TABLE IF NOT EXISTS news(
   sentiment REAL
 );
 
+-- Helpful indices for query patterns
+CREATE INDEX IF NOT EXISTS news_symbol_date ON news(symbol, date);
+
 -- Moneycontrol Technicals cache
 CREATE TABLE IF NOT EXISTS mc_tech(
   symbol TEXT,
@@ -65,6 +68,16 @@ CREATE TABLE IF NOT EXISTS rag_embeddings(
   PRIMARY KEY(ns, id)
 );
 
+-- Optional: URL indexing status per namespace
+CREATE TABLE IF NOT EXISTS rag_url_status(
+  ns TEXT,
+  url TEXT,
+  last_indexed TEXT,
+  status TEXT,
+  note TEXT,
+  PRIMARY KEY(ns, url)
+);
+
 CREATE TABLE IF NOT EXISTS analyses(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   symbol TEXT,
@@ -75,6 +88,22 @@ CREATE TABLE IF NOT EXISTS analyses(
   score REAL,
   recommendation TEXT
 );
+
+-- History of Top Picks snapshots (per day per symbol)
+CREATE TABLE IF NOT EXISTS top_picks_history(
+  snapshot_date TEXT,
+  symbol TEXT,
+  score REAL,
+  momentum REAL,
+  sentiment REAL,
+  mc_score REAL,
+  recommendation TEXT,
+  created_at TEXT,
+  PRIMARY KEY(snapshot_date, symbol)
+);
+
+CREATE INDEX IF NOT EXISTS tph_date_idx ON top_picks_history(snapshot_date);
+CREATE INDEX IF NOT EXISTS tph_symbol_idx ON top_picks_history(symbol);
 `);
   logger.info('db_schema_ready');
 } catch (err) {

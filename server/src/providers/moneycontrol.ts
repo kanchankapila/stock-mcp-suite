@@ -15,9 +15,11 @@ export async function fetchMcInsights(scId: string, type: string = 'c'): Promise
   const id = scId.toUpperCase();
   const url = `https://api.moneycontrol.com//mcapi//v1//extdata//mc-insights?scId=${encodeURIComponent(id)}&type=${encodeURIComponent(type)}`;
   try {
+    logger.info({ url }, 'mc_fetch_insights_start');
     const res = await fetch(url, { headers: { 'Accept': 'application/json,*/*' } });
     if (!res.ok) throw new Error(`Moneycontrol error: ${res.status}`);
     const json: any = await res.json();
+    logger.info({ url }, 'mc_fetch_insights_ok');
     const cls = json?.data?.classification || {};
     const out: McInsight = {
       scId: id,
@@ -68,9 +70,11 @@ export async function fetchMcTech(scId: string, freq: 'D'|'W'|'M'='D'): Promise<
   const f = (String(freq || 'D').toUpperCase() as 'D'|'W'|'M');
   const url = `https://priceapi.moneycontrol.com//pricefeed//techindicator//${encodeURIComponent(f)}//${encodeURIComponent(id)}`;
   try {
+    logger.info({ url }, 'mc_fetch_tech_start');
     const res = await fetch(url, { headers: { 'Accept': 'application/json,*/*' } });
     if (!res.ok) throw new Error(`Moneycontrol tech error: ${res.status}`);
     const json: any = await res.json();
+    logger.info({ url }, 'mc_fetch_tech_ok');
     const d = json?.data || {};
     const out: McTech = {
       scId: id,

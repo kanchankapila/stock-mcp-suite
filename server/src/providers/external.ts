@@ -38,12 +38,21 @@ async function fetchJson(url: string, extra?: Record<string,string>, timeoutMs=1
     const ctrl = new AbortController();
     const to = setTimeout(()=>ctrl.abort(), timeoutMs);
     try {
+      logger.info({ url, attempt: i+1 }, 'external_fetch_start');
       const res = await fetch(url, { headers, signal: ctrl.signal });
       clearTimeout(to);
       if (!res.ok) {
+        logger.warn({ url, status: res.status }, 'external_fetch_not_ok');
         lastErr = new Error(`${res.status}`);
       } else {
-        try { return await res.json(); } catch { return null; }
+        try {
+          const j = await res.json();
+          logger.info({ url, status: res.status }, 'external_fetch_ok');
+          return j;
+        } catch {
+          logger.warn({ url }, 'external_fetch_json_parse_failed');
+          return null;
+        }
       }
     } catch (err) {
       lastErr = err;

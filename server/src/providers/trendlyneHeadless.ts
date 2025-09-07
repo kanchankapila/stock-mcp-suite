@@ -31,7 +31,7 @@ export async function refreshTrendlyneCookieHeadless() {
     const executablePath = process.env.CHROME_EXECUTABLE_PATH;
     logger.info({ executablePath }, 'trendlyne_headless_launch');
     browser = await puppeteer.launch({
-      headless: true,
+      headless: 'new',
       executablePath: executablePath || undefined,
       args: [
         '--no-sandbox','--disable-setuid-sandbox','--disable-gpu','--disable-dev-shm-usage',
@@ -40,8 +40,8 @@ export async function refreshTrendlyneCookieHeadless() {
     const page = await browser.newPage();
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
     await page.setCacheEnabled(true);
-    // Prefer the full login page; the modal may not contain form inputs immediately
-    const targetUrl = "https://trendlyne.com/visitor/loginmodal/";
+    // Prefer the full login page; modal can be flaky for automation
+    const targetUrl = "https://trendlyne.com/visitor/login/";
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
     // Try multiple selector variants for robustness
     const userSelectors = ['#id_login', 'input[name="login"]', 'input[name="username"]'];
@@ -76,30 +76,57 @@ export async function refreshTrendlyneCookieHeadless() {
         await page.waitForTimeout(1500);
       }
     } else {
-      // As a fallback, try the modal URL too
-      await page.goto('https://trendlyne.com/visitor/loginmodal/', { waitUntil: 'domcontentloaded' });
+      // As a fallback, try the modal URL and wait for inputs explicitly
       try {
+        await page.goto('https://trendlyne.com/visitor/loginmodal/', { waitUntil: 'domcontentloaded' });
+        await page.waitForSelector('#id_login', { timeout: 4000 });
         await page.type('#id_login', TRENDLYNE_EMAIL, { delay: 10 });
+        await page.waitForSelector('#id_password', { timeout: 4000 });
         await page.type('#id_password', TRENDLYNE_PASSWORD, { delay: 10 });
         await page.keyboard.press('Enter');
         await page.waitForTimeout(1500);
-      } catch {}
+      } catch {
+        // Attempt inside iframes (some deployments show login inside iframe)
+        const frames = page.frames();
+        for (const fr of frames) {
+          try {
+            const iu = await fr.$('#id_login');
+            const ip = await fr.$('#id_password');
+            if (iu && ip) {
+              await fr.focus('#id_login'); await fr.type('#id_login', TRENDLYNE_EMAIL, { delay: 10 });
+              await fr.focus('#id_password'); await fr.type('#id_password', TRENDLYNE_PASSWORD, { delay: 10 });
+              await fr.keyboard.press('Enter');
+              await page.waitForTimeout(1500);
+              break;
+            }
+          } catch {}
+        }
+      }
     }
 
     const cookies = await page.cookies();
-    let csrftoken = '';
-    let trend = '';
+    // Accept any cookies for trendlyne.com domain; construct header from all unique pairs
+    const parts: string[] = [];
+    let foundAny = false;
     for (const c of cookies) {
-      if (/^csrftoken$/i.test(c.name)) csrftoken = c.value;
-      // Some environments may name it with or without leading dot
-      if (c.name === '.trendlyne' || c.name === 'trendlyne') trend = c.value;
+      if (!c || !c.name) continue;
+      if (!c.value) continue;
+      // Restrict to trendlyne cookies or common auth names
+      if ((c.domain && /trendlyne\.com$/i.test(c.domain)) || /^(csrftoken|sessionid|trendlyne|\.trendlyne)$/i.test(c.name)) {
+        parts.push(`${c.name}=${c.value}`);
+        foundAny = true;
+      }
     }
-    if (!trend) throw new Error('trendlyne cookie not found');
-    const cookieHeader = csrftoken ? `csrftoken=${csrftoken}; .trendlyne=${trend}` : `.trendlyne=${trend}`;
+    if (!foundAny) {
+      logger.warn({ cookies: cookies.map(c=>c.name) }, 'trendlyne_no_cookies_found');
+      throw new Error('trendlyne cookie not found');
+    }
+    const cookieHeader = parts.join('; ');
     setExternalTrendlyneCookie(cookieHeader);
     const ms = Date.now() - start;
+    const hasCsrf = cookies.some(c => /^csrftoken$/i.test(c.name));
     logger.info({ ms }, 'trendlyne_cookie_refreshed');
-    return { ok: true, ms, hasCsrf: !!csrftoken };
+    return { ok: true, ms, hasCsrf };
   } catch (err) {
     logger.error({ err }, 'trendlyne_headless_failed');
     throw err;

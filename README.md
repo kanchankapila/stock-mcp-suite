@@ -47,8 +47,8 @@ npm start
 
 ### 4) Try it
 1. Open the frontend: `http://localhost:4200`
-2. Search for a symbol (e.g., `AAPL`), click **Ingest** to pull data (uses API keys if provided; otherwise sample data).
-3. View overview, price chart, sentiment, RAG answers, strategy score, backtest & recommendation.
+2. Search for a symbol (e.g., `AAPL`), click **Ingest** to pull data (uses API keys if provided; otherwise sample data). Ingest now also indexes recent news into the RAG vector store for that symbol.
+3. View overview, price chart, sentiment, RAG answers, strategy score, backtest & recommendation. Use the “Reindex Recent Sources” action to enrich RAG with Trendlyne/Yahoo summaries on demand.
 
 ### Environment
 Create `server/.env` to enable live data:
@@ -75,6 +75,10 @@ Override via `server/.env` (examples shown commented in that file):
 - `TICKER_MC_KEY`, `TICKER_MC_SUFFIX` for Moneycontrol insights.
 - `STOCKLIST_PATH`: explicit path to `stocklist.ts` if not in the default location.
 
+Dynamic providers
+- Any env var pair matching `TICKER_<PROVIDER>_KEY` (and optional `TICKER_<PROVIDER>_SUFFIX`) defines a new provider dynamically.
+- These dynamic providers are discovered at runtime and exposed by the resolve APIs below.
+
 Under the hood, the resolver maps any input (name/symbol/mcsymbol/isin/tlid) to the configured provider ticker. See `server/src/utils/ticker.ts`.
 
 Examples
@@ -83,6 +87,52 @@ Examples
   - `TICKER_NEWS_KEY=name`, `TICKER_NEWS_SUFFIX=`
 - Use Moneycontrol mcsymbol BE03:
   - `TICKER_MC_KEY=mcsymbol`, `TICKER_MC_SUFFIX=`
+
+### Resolve APIs
+
+Introspect the provider mappings and resolve a given input (symbol/name/isin/mcsymbol/tlid) per provider.
+
+- `GET /api/resolve/providers`
+  - Lists all available providers (defaults + any discovered via env) and their resolution config.
+  - Response example:
+    ```json
+    {
+      "ok": true,
+      "data": [
+        { "provider": "alpha", "key": "symbol", "suffix": "" },
+        { "provider": "mc", "key": "mcsymbol", "suffix": "" },
+        { "provider": "news", "key": "name", "suffix": "" },
+        { "provider": "trendlyne", "key": "tlid", "suffix": "" },
+        { "provider": "yahoo", "key": "symbol", "suffix": ".NS" }
+      ]
+    }
+    ```
+
+- `GET /api/resolve/:input`
+  - Resolves `:input` for all providers and returns both a map and backwards-compatible top-level fields.
+  - Example: `GET /api/resolve/DABUR`
+    ```json
+    {
+      "ok": true,
+      "data": {
+        "input": "DABUR",
+        "entry": { "name":"Dabur India","symbol":"DABUR","mcsymbol":"DI","isin":"INE016A01026","tlid":"303" },
+        "providers": ["alpha","mc","news","trendlyne","yahoo"],
+        "resolved": {
+          "alpha": "DABUR",
+          "mc": "DI",
+          "news": "DABUR INDIA",
+          "trendlyne": "303",
+          "yahoo": "DABUR.NS"
+        },
+        "yahoo": "DABUR.NS",
+        "news": "DABUR INDIA",
+        "alpha": "DABUR",
+        "mc": "DI",
+        "trendlyne": "303"
+      }
+    }
+    ```
 
 ### RAG (LangChain)
 
@@ -162,8 +212,8 @@ Trendlyne (optional)
 - Cache file: `TL_COOKIE_CACHE_PATH` (where cookie is persisted).
 
 RAG / LLM (optional)
-- `RAG_STORE`: `memory` (default) or `file` (see code for additional stores).
-- `RAG_DIR`: base dir for file-backed store.
+- `RAG_STORE`: `memory` (default), `sqlite`, `hnsw`, or `chroma`.
+- `RAG_DIR`: base dir for file‑backed HNSW store when `RAG_STORE=hnsw`.
 - OpenAI: `OPENAI_API_KEY`, `OPENAI_MODEL` (default `gpt-4o-mini`), `OPENAI_EMBEDDING_MODEL` (default `text-embedding-3-small`).
 - Hugging Face: `HUGGINGFACEHUB_API_KEY`, `HF_EMBEDDING_MODEL` (default `sentence-transformers/all-MiniLM-L6-v2`).
 
@@ -198,6 +248,7 @@ PREFETCH_NEWS_BATCH=10
 PREFETCH_NEWS_INTERVAL_MS=300000
 PREFETCH_NEWS_COOLDOWN_MS=900000
 PREFETCH_MC_TECH_ENABLE=true
+PREFETCH_RAG_INDEX_ENABLE=false
 PREFETCH_USE_STOOQ_FALLBACK=true
 NEWS_FROM_DAYS=5
 
@@ -217,6 +268,9 @@ OPENAI_MODEL=gpt-4o-mini
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 # HUGGINGFACEHUB_API_KEY=...
 HF_EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+ 
+News behavior
+- `NEWS_FALLBACK_TO_SAMPLE_ON_429`: when NewsAPI returns HTTP 429 (rate limit), ingest will, if true (default), use sample data to continue analysis. If false, it skips news instead of failing.
 ```
 - `LIVE_*`: polling cadence, batch size, fallbacks.
 - `INGEST_USE_STOOQ_FALLBACK`: enable Stooq fallback during ingest.

@@ -1,6 +1,7 @@
 import { loadStocklist } from './stocklist.js';
 
-type Provider = 'yahoo' | 'alpha' | 'news' | 'mc';
+// Allow dynamic providers discovered from env (e.g., TICKER_FOO_KEY)
+export type Provider = string;
 
 type Entry = {
   name?: string;
@@ -18,7 +19,10 @@ function getEnv(key: string, def: string) {
 function providerConfig(provider: Provider) {
   const p = provider.toUpperCase();
   return {
-    key: getEnv(`TICKER_${p}_KEY`, provider === 'news' ? 'name' : provider === 'mc' ? 'mcsymbol' : 'symbol'),
+    key: getEnv(
+      `TICKER_${p}_KEY`,
+      provider === 'news' ? 'name' : provider === 'mc' ? 'mcsymbol' : provider === 'trendlyne' ? 'tlid' : 'symbol'
+    ),
     suffix: getEnv(`TICKER_${p}_SUFFIX`, provider === 'yahoo' ? '.NS' : ''),
   } as { key: keyof Entry, suffix: string };
 }
@@ -83,4 +87,22 @@ export function resolveTicker(input: string, provider: Provider): string {
 export function findStockEntry(input: string) {
   const entries = loadStocklist() as Entry[];
   return matchEntry(input, entries);
+}
+
+// Discover providers from env: any TICKER_<NAME>_KEY pair defines a provider
+export function listTickerProvidersFromEnv(): string[] {
+  const keys = Object.keys(process.env || {});
+  const provs = new Set<string>();
+  for (const k of keys) {
+    const m = /^TICKER_([A-Z0-9_]+)_KEY$/.exec(k);
+    if (m) provs.add(m[1].toLowerCase());
+  }
+  // Ensure common defaults even if not in env
+  ['yahoo','news','alpha','mc','trendlyne'].forEach(p=> provs.add(p));
+  return Array.from(provs);
+}
+
+// Expose provider resolution config for inspection
+export function getProviderResolutionConfig(provider: Provider) {
+  return providerConfig(provider);
 }

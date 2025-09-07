@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { etGetAllIndices, etSectorPerformance, etIndexConstituents, mcPriceVolume, mcStockHistory, tickertapeMmiNow, marketsMojoValuationMeter, mcChartInfo, mcPriceForecast, mcFnoExpiries, mcTechRsi } from '../providers/external.js';
-import { tlAdvTechnical, tlSmaChart, tlDerivativeBuildup, tlHeatmap, getTrendlyneCookieStatus } from '../providers/trendlyne.js';
+import { tlAdvTechnical, tlSmaChart, tlDerivativeBuildup, tlHeatmap, getTrendlyneCookieStatus, getTrendlyneCookieDetails, normalizeAdvTechnical } from '../providers/trendlyne.js';
+import fetch from 'node-fetch';
 import { refreshTrendlyneCookieHeadless } from '../providers/trendlyneHeadless.js';
 import { resolveTicker, findStockEntry } from '../utils/ticker.js';
 import { fetchMcTech } from '../providers/moneycontrol.js';
@@ -90,24 +91,43 @@ router.get('/mc/tech', asyncHandler(async (req, res) => {
 router.get('/trendlyne/adv-tech', asyncHandler(async (req, res) => {
   const input = String(req.query.symbol || '');
   const tlid = String(req.query.tlid || '');
+  const lookback = req.query.lookback ? Number(req.query.lookback) : 24;
   let id = tlid;
   if (!id && input) {
     const base = input.includes('.') ? input.split('.')[0] : input;
-    const e = findStockEntry(base);
-    id = e?.tlid || '';
+    try { id = resolveTicker(base, 'trendlyne'); } catch { id = ''; }
   }
   if (!id) return res.status(400).json({ ok:false, error: 'tlid or symbol required' });
-  const [adv, sma] = await Promise.all([
-    tlAdvTechnical(id, 24).catch(()=>null),
-    tlSmaChart(id).catch(()=>null)
-  ]);
-  res.json({ ok: true, data: { tlid: id, adv, sma } });
+  // Public unauthenticated fetch for Advanced Technicals (no cookie handling)
+  const url = `https://trendlyne.com/equity/api/stock/adv-technical-analysis/${encodeURIComponent(id)}/${encodeURIComponent(String(isFinite(lookback) && lookback > 0 ? lookback : 24))}/`;
+  try {
+    const resp = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'application/json,text/plain,*/*',
+        'Referer': 'https://trendlyne.com/'
+      }
+    } as any);
+    if (!resp.ok) return res.status(resp.status).json({ ok:false, error: `trendlyne_${resp.status}` });
+    const adv = await resp.json().catch(()=>null);
+    // Optionally include a lightweight SMA for the card sparkline
+    const sma = await tlSmaChart(id).catch(()=>null);
+    const normalized = adv ? normalizeAdvTechnical(adv) : null;
+    return res.json({ ok: true, data: { tlid: id, adv, sma, normalized } });
+  } catch (err) {
+    return res.status(502).json({ ok:false, error: 'trendlyne_adv_fetch_failed' });
+  }
 }));
 
 router.get('/trendlyne/derivatives', asyncHandler(async (req, res) => {
   const dateKey = String(req.query.date || '').trim();
-  const tlid = String(req.query.tlid || '').trim();
+  let tlid = String(req.query.tlid || '').trim();
+  const symbol = String(req.query.symbol || '').trim();
   if (!dateKey) return res.status(400).json({ ok:false, error:'date required (e.g., 2024-08-30)' });
+  if (!tlid && symbol) {
+    const base = symbol.includes('.') ? symbol.split('.')[0] : symbol;
+    try { tlid = resolveTicker(base, 'trendlyne'); } catch {}
+  }
   const [buildup, heatmap] = await Promise.all([
     tlid ? tlDerivativeBuildup(dateKey, tlid).catch(()=>null) : Promise.resolve(null),
     tlHeatmap(dateKey).catch(()=>null)
@@ -118,6 +138,57 @@ router.get('/trendlyne/derivatives', asyncHandler(async (req, res) => {
 // Trendlyne cookie status
 router.get('/trendlyne/cookie-status', asyncHandler(async (_req, res) => {
   res.json({ ok: true, data: getTrendlyneCookieStatus() });
+}));
+
+// Trendlyne SMA chart by tlid or symbol (ensures cookie if possible)
+router.get('/trendlyne/sma', asyncHandler(async (req, res) => {
+  const input = String(req.query.symbol || '');
+  const tlid = String(req.query.tlid || '');
+  let id = tlid;
+  if (!id && input) {
+    const base = input.includes('.') ? input.split('.')[0] : input;
+    try { id = resolveTicker(base, 'trendlyne'); } catch { id = ''; }
+  }
+  if (!id) return res.status(400).json({ ok:false, error: 'tlid or symbol required' });
+  // Prefer cookie-backed provider with smart fallback
+  try {
+    let sma = await tlSmaChart(id).catch(()=>null);
+    if (!sma || (Array.isArray((sma as any)?.data) && !(sma as any).data.length)) {
+      // Retry via headless cookie refresh if creds are present
+      if (process.env.TRENDLYNE_EMAIL && process.env.TRENDLYNE_PASSWORD) {
+        try { await refreshTrendlyneCookieHeadless(); } catch {}
+        sma = await tlSmaChart(id).catch(()=>null);
+      }
+    }
+    if (!sma) {
+      // Public unauthenticated fetch (as last resort)
+      const url = `https://trendlyne.com/mapp/v1/stock/chart-data/${encodeURIComponent(id)}/SMA/`;
+      try {
+        const resp = await fetch(url, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept': 'application/json,text/plain,*/*',
+            'Referer': 'https://trendlyne.com/'
+          }
+        } as any);
+        if (resp.ok) sma = await resp.json().catch(()=>null);
+      } catch {}
+    }
+    return res.json({ ok: true, data: { tlid: id, sma } });
+  } catch {
+    return res.status(502).json({ ok:false, error: 'trendlyne_sma_fetch_failed' });
+  }
+}));
+
+// Trendlyne cookie dump (masked by default). To allow raw dump, set ALLOW_COOKIE_DUMP=true
+router.get('/trendlyne/cookie-dump', asyncHandler(async (req, res) => {
+  const wantRaw = String(req.query.raw || '').toLowerCase() === 'true';
+  const allow = String(process.env.ALLOW_COOKIE_DUMP || 'false') === 'true';
+  const data = getTrendlyneCookieDetails(wantRaw && allow);
+  if (wantRaw && !allow) {
+    return res.json({ ok: true, data, note: 'Raw cookie disabled. Set ALLOW_COOKIE_DUMP=true to enable.' });
+  }
+  res.json({ ok: true, data });
 }));
 
 // Headless refresh of Trendlyne cookie (requires TRENDLYNE_EMAIL & TRENDLYNE_PASSWORD)

@@ -10,6 +10,7 @@
     "@angular/common": "^18.0.0",
     "@angular/core": "^18.0.0",
     "@angular/platform-browser": "^18.0.0",
+    "chart.js": "4.5.0",
     "rxjs": "^7.8.1",
     "zone.js": "^0.14.7"
   },

@@ -6,6 +6,7 @@ import { fetchStooqDaily } from './stooq.js';
 import { fetchNews, parseNews } from '../providers/news.js';
 import { fetchMcInsights, fetchMcTech } from '../providers/moneycontrol.js';
 import { insertPriceRow, upsertStock, insertNewsRow, upsertMcTech } from '../db.js';
+import { indexNamespace } from '../rag/langchain.js';
 import { logger } from '../utils/logger.js';
 import { sentimentScore } from '../analytics/sentiment.js';
 import { loadStocklist } from '../utils/stocklist.js';
@@ -183,9 +184,12 @@ export function startYahooPrefetchFromStocklist() {
             const q = newsMap.get(ysym) || ysym;
             const json = await fetchNews(q, NA);
             const news = parseNews(ysym, json);
+            const textsForIndex: Array<{ text: string; metadata: Record<string, unknown> }> = [];
             for (const n of news) {
               const s = sentimentScore([`${n.title}. ${n.summary}`]);
               insertNewsRow({ id: n.id, symbol: ysym, date: n.date, title: n.title, summary: n.summary, url: n.url, sentiment: s });
+              const t = `${n.title?.trim() || ''}. ${n.summary?.trim() || ''}`.trim();
+              if (t) textsForIndex.push({ text: t, metadata: { date: String(n.date || '').slice(0,10), source: 'news', url: n.url || '' } });
             }
             // Moneycontrol insights per symbol
             const mcid = mcMap.get(ysym);
@@ -198,6 +202,8 @@ export function startYahooPrefetchFromStocklist() {
                 const date = new Date().toISOString();
                 const sent = sentimentScore([`${title}. ${summary}`]);
                 insertNewsRow({ id, symbol: ysym, date, title, summary, url: 'https://www.moneycontrol.com/', sentiment: sent });
+                const mt = `${title.trim()}. ${summary.trim()}`.trim();
+                if (mt) textsForIndex.push({ text: mt, metadata: { date: date.slice(0,10), source: 'mc', url: '' } });
               }
               // Moneycontrol technicals (optional prefetch)
               if (String(process.env.PREFETCH_MC_TECH_ENABLE || 'true') === 'true') {
@@ -212,6 +218,15 @@ export function startYahooPrefetchFromStocklist() {
                   logger.warn({ err: e3, symbol: ysym }, 'prefetch_mc_tech_failed');
                 }
               }
+            }
+            // Optional: push into RAG vector index per symbol
+            try {
+              const enable = String(process.env.PREFETCH_RAG_INDEX_ENABLE || 'false').toLowerCase() === 'true';
+              if (enable && textsForIndex.length) {
+                await indexNamespace(ysym, { texts: textsForIndex });
+              }
+            } catch (e) {
+              logger.warn({ err: e, symbol: ysym }, 'prefetch_rag_index_failed');
             }
           } catch (err) {
             const msg = String((err as any)?.message || err);
