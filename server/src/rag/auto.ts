@@ -1,4 +1,4 @@
-import db, { getMcTech } from '../db.js';
+import db, { getMcTech, getLatestOptionsBias } from '../db.js';
 import { logger } from '../utils/logger.js';
 import { indexNamespace } from './langchain.js';
 import { loadStocklist } from '../utils/stocklist.js';
@@ -110,13 +110,15 @@ export async function ragAutoSnapshotTopPicks(days = 60, limit = 10): Promise<{ 
       const techD = getMcTech(s, 'D') as any;
       let mcs = NaN;
       try { mcs = safeNumber(techD?.score ?? techD?.stockScore, NaN); } catch {}
+      const ob = getLatestOptionsBias(s);
+      const optBias = Number.isFinite(Number(ob)) ? Math.max(-1, Math.min(1, Number(ob))) : 0;
       const momN = Math.max(-1, Math.min(1, mom));
       const sentN = Math.max(-1, Math.min(1, sent));
       const scoreN = Number.isFinite(mcs) ? Math.max(-1, Math.min(1, (mcs - 50) / 50)) : 0;
-      const composite = 0.4 * momN + 0.35 * sentN + 0.25 * scoreN;
+      const composite = 0.35 * momN + 0.30 * sentN + 0.20 * scoreN + 0.15 * optBias;
       let reco = 'HOLD';
       if (composite >= 0.25) reco = 'BUY'; else if (composite <= -0.25) reco = 'SELL';
-      results.push({ symbol: s, score: Number(composite.toFixed(3)), momentum: mom, sentiment: sent, mcScore: Number.isFinite(mcs) ? mcs : null, recommendation: reco });
+      results.push({ symbol: s, score: Number(composite.toFixed(3)), momentum: mom, sentiment: sent, mcScore: Number.isFinite(mcs) ? mcs : null, optionsBias: Number.isFinite(optBias) ? optBias : null, recommendation: reco });
     } catch {}
   }
   const top = results.sort((a, b) => b.score - a.score).slice(0, Math.max(1, Math.min(100, Number.isFinite(limit) ? limit : 10)));

@@ -1,9 +1,10 @@
 import { Router } from 'express';
-import db, { upsertStock, insertPriceRow, insertNewsRow, listPrices, listNews, saveAnalysis, getMcTech, upsertMcTech } from '../db.js';
+import db, { upsertStock, insertPriceRow, insertNewsRow, listPrices, listNews, saveAnalysis, getMcTech, upsertMcTech, upsertYahooCache, getLatestOptionsBias, listOptionsMetrics } from '../db.js';
 import { fetchDailyTimeSeries, parseAlphaDaily } from '../providers/alphaVantage.js';
 import { fetchNews, parseNews } from '../providers/news.js';
 import { fetchMcInsights, fetchMcTech } from '../providers/moneycontrol.js';
 import { fetchYahooDaily, parseYahooDaily, fetchYahooQuoteSummary, fetchYahooQuote } from '../providers/yahoo.js';
+import { fetchYahooFin } from '../providers/yahooFin.js';
 import { fetchStooqDaily } from '../providers/stooq.js';
 import { sentimentScore } from '../analytics/sentiment.js';
 import { predictNextClose } from '../analytics/predict.js';
@@ -16,6 +17,7 @@ import { asyncHandler } from '../utils/asyncHandler.js';
 import { logger } from '../utils/logger.js';
 import { loadStocklist } from '../utils/stocklist.js';
 import { resolveTicker, findStockEntry, listTickerProvidersFromEnv, getProviderResolutionConfig } from '../utils/ticker.js';
+import { spawn } from 'child_process';
 
 export const router = Router();
 
@@ -108,6 +110,104 @@ router.post('/ingest/:symbol', asyncHandler(async (req, res) => {
       }
     }
 
+    // Yahoo_fin profile & KPIs + financials summary -> sentiment + RAG docs + options metrics
+    try {
+      const yfin = await fetchYahooFin(yahooSymbol, '1y', '1d').catch(()=>null);
+      if (yfin && yfin.ok !== false) {
+        const qt = (yfin as any).quote_table || {};
+        const info = (yfin as any).info || {};
+        const sector = info.sector || info.Sector || '';
+        const industry = info.industry || info.Industry || '';
+        const website = info.website || info.Website || '';
+        const summary = info.longBusinessSummary || info.long_business_summary || '';
+        const mcap = qt['Market Cap'] || qt['Market Cap (intraday)'] || '';
+        const pe = qt['PE Ratio (TTM)'] || '';
+        const eps = qt['EPS (TTM)'] || '';
+        const kpiText = `Sector: ${sector}. Industry: ${industry}. Market Cap: ${mcap}. PE: ${pe}. EPS: ${eps}. ${summary}`.trim();
+        const makeFinSummary = () => {
+          try {
+            // Revenue trend
+            const isObj = (yfin as any)?.income_statement || {};
+            const revMap = isObj?.totalRevenue || isObj?.TotalRevenue || null;
+            let revSummary = '';
+            if (revMap && typeof revMap === 'object') {
+              const entries = Object.entries(revMap).filter(([k,_]) => /(\d{4}(-\d{2}-\d{2})?)/.test(String(k))).sort((a,b)=> String(a[0]) < String(b[0]) ? -1 : 1);
+              const nums = entries.map(([,v]) => Number(v)).filter(n=> Number.isFinite(n));
+              if (nums.length >= 2) {
+                const first = nums[0], last = nums[nums.length-1];
+                const pct = first !== 0 ? ((last-first)/Math.abs(first))*100 : 0;
+                revSummary = `Revenue ${pct>=0? 'increased':'decreased'} ${Math.abs(pct).toFixed(1)}% over ${entries.length} periods.`;
+              }
+            }
+            // Operating cash flow trend
+            const cfObj = (yfin as any)?.cash_flow || {};
+            const ocfMap = (cfObj?.totalCashFromOperatingActivities) || (cfObj?.TotalCashFromOperatingActivities) || null;
+            let ocfSummary = '';
+            if (ocfMap && typeof ocfMap === 'object') {
+              const entries = Object.entries(ocfMap).filter(([k,_]) => /(\d{4}(-\d{2}-\d{2})?)/.test(String(k))).sort((a,b)=> String(a[0]) < String(b[0]) ? -1 : 1);
+              const nums = entries.map(([,v]) => Number(v)).filter(n=> Number.isFinite(n));
+              if (nums.length >= 2) {
+                const first = nums[0], last = nums[nums.length-1];
+                const pct = first !== 0 ? ((last-first)/Math.abs(first))*100 : 0;
+                ocfSummary = `Operating cash flow ${pct>=0? 'increased':'decreased'} ${Math.abs(pct).toFixed(1)}% over ${entries.length} periods.`;
+              }
+            }
+            // Margins from stats
+            let marginsSummary = '';
+            try {
+              const statsArr: Array<any> = Array.isArray((yfin as any)?.stats) ? (yfin as any).stats : [];
+              const findAttr = (name: string) => {
+                const row = (statsArr || []).find((r: any) => new RegExp(name, 'i').test(String(r?.Attribute || r?.attribute || '')));
+                return row ? (row?.Value ?? row?.value ?? '') : '';
+              };
+              const pm = String(findAttr('Profit Margin'));
+              const om = String(findAttr('Operating Margin')) || String(findAttr('Operating Margin (ttm)'));
+              const pmNum = (()=>{ const m = pm.match(/-?\d+(\.\d+)?/); return m ? Number(m[0]) : NaN; })();
+              const omNum = (()=>{ const m = om.match(/-?\d+(\.\d+)?/); return m ? Number(m[0]) : NaN; })();
+              const parts = [] as string[];
+              if (Number.isFinite(pmNum)) parts.push(`Profit margin ${pmNum.toFixed(1)}%`);
+              if (Number.isFinite(omNum)) parts.push(`Operating margin ${omNum.toFixed(1)}%`);
+              if (parts.length) marginsSummary = parts.join(', ') + '.';
+            } catch {}
+            return [revSummary, ocfSummary, marginsSummary].filter(Boolean).join(' ');
+          } catch { return ''; }
+        };
+        const finText = makeFinSummary();
+        const date = new Date().toISOString();
+        const texts: Array<{ text: string; metadata: any }> = [];
+        if (kpiText) {
+          const sid = `yfin:profile:${yahooSymbol}`;
+          const s = sentimentScore([kpiText]);
+          insertNewsRow({ id: sid, symbol: yahooSymbol, date, title: 'Yahoo Profile & KPIs', summary: kpiText.slice(0, 960), url: website || 'https://finance.yahoo.com/', sentiment: s });
+          texts.push({ text: kpiText, metadata: { date: date.slice(0,10), source: 'yahoo_fin', url: website || '' } });
+        }
+        if (finText) {
+          const fid = `yfin:financials:${yahooSymbol}`;
+          const s2 = sentimentScore([finText]);
+          insertNewsRow({ id: fid, symbol: yahooSymbol, date, title: 'Yahoo Financials Summary', summary: finText.slice(0, 960), url: 'https://finance.yahoo.com/', sentiment: s2 });
+          texts.push({ text: finText, metadata: { date: date.slice(0,10), source: 'yahoo_fin_financials', url: '' } });
+        }
+        if (texts.length) { try { await indexNamespace(yahooSymbol, { texts }); } catch {} }
+
+        // Store options metrics if options present
+        try {
+          const opt = (yfin as any)?.options || null;
+          const calls: Array<any> = Array.isArray(opt?.calls) ? opt.calls : [];
+          const puts: Array<any> = Array.isArray(opt?.puts) ? opt.puts : [];
+          const sum = (arr: Array<any>, key: string) => arr.reduce((a, r)=> a + (Number(r?.[key]) || 0), 0);
+          const callOi = sum(calls, 'Open Interest') || sum(calls, 'openInterest') || sum(calls, 'open_interest');
+          const putOi = sum(puts, 'Open Interest') || sum(puts, 'openInterest') || sum(puts, 'open_interest');
+          const callVol = sum(calls, 'Volume') || sum(calls, 'volume');
+          const putVol = sum(puts, 'Volume') || sum(puts, 'volume');
+          let pcr: number | null = null, pvr: number | null = null, bias: number | null = null;
+          if ((callOi + putOi) > 0) { pcr = putOi / Math.max(1, callOi); bias = (callOi - putOi) / (callOi + putOi); }
+          if ((callVol + putVol) > 0) { pvr = putVol / Math.max(1, callVol); }
+          const now = new Date().toISOString().slice(0,10);
+          try { const { upsertOptionsMetrics } = await import('../db.js'); (upsertOptionsMetrics as any)({ symbol: yahooSymbol, date: now, pcr, pvr, bias }); } catch {}
+        } catch {}
+      }
+    } catch {}
+
     // compute per-article sentiment and store
     for (const n of news) {
       const s = sentimentScore([`${n.title}. ${n.summary}`]);
@@ -170,6 +270,16 @@ router.get('/stocks/:symbol/news', asyncHandler((req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   const news = listNews(symbol, 50);
   res.json({ ok:true, data: news });
+}));
+
+// Options metrics (PCR, PVR, bias) for a symbol
+router.get('/stocks/:symbol/options-metrics', asyncHandler((req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  const days = req.query.days ? Number(req.query.days) : 60;
+  const limit = req.query.limit ? Number(req.query.limit) : 90;
+  const rows = listOptionsMetrics(symbol, { days, limit });
+  const latest = rows.length ? rows[rows.length - 1] : null;
+  res.json({ ok: true, data: { latest, history: rows } });
 }));
 
 router.post('/stocks/:symbol/analyze', asyncHandler((req, res) => {
@@ -262,20 +372,33 @@ router.get('/top-picks', asyncHandler(async (req, res) => {
       try { const pv = techD?.pivot_level?.pivot ?? techD?.pivots?.pivot ?? techD?.pivot ?? null; piv = safeNumber(pv, NaN); } catch {}
       try { mcs = safeNumber(techD?.score ?? techD?.stockScore, NaN); } catch {}
 
-      // Normalize features to [-1,1]
-      const momN = Math.max(-1, Math.min(1, mom));
-      const sentN = Math.max(-1, Math.min(1, sent));
-      const scoreN = Number.isFinite(mcs) ? Math.max(-1, Math.min(1, (mcs-50)/50)) : 0;
+  // Normalize features to [-1,1]
+  const momN = Math.max(-1, Math.min(1, mom));
+  const sentN = Math.max(-1, Math.min(1, sent));
+  const scoreN = Number.isFinite(mcs) ? Math.max(-1, Math.min(1, (mcs-50)/50)) : 0;
+  // Options bias (latest)
+  const ob = getLatestOptionsBias(s);
+  const optBias = Number.isFinite(Number(ob)) ? Math.max(-1, Math.min(1, Number(ob))) : 0;
 
-      // Composite score weights: momentum 0.4, sentiment 0.35, tech score 0.25
-      const composite = 0.4*momN + 0.35*sentN + 0.25*scoreN;
+  // Composite score weights: momentum 0.35, sentiment 0.30, tech 0.20, options 0.15
+  const composite = 0.35*momN + 0.30*sentN + 0.20*scoreN + 0.15*optBias;
 
       // Recommendation heuristic
       let reco = 'HOLD';
       if (composite >= 0.25) reco = 'BUY';
       else if (composite <= -0.25) reco = 'SELL';
 
-      results.push({ symbol: s, momentum: mom, sentiment: sent, mcScore: Number.isFinite(mcs) ? mcs : null, rsi: Number.isFinite(rsi) ? rsi : null, pivot: Number.isFinite(piv) ? piv : null, score: Number(composite.toFixed(3)), recommendation: reco });
+  results.push({ symbol: s,
+    momentum: mom, sentiment: sent, mcScore: Number.isFinite(mcs) ? mcs : null, rsi: Number.isFinite(rsi) ? rsi : null, pivot: Number.isFinite(piv) ? piv : null,
+    optionsBias: Number.isFinite(optBias) ? optBias : null,
+    score: Number(composite.toFixed(3)), recommendation: reco,
+    contrib: {
+      momentum: Number((0.35*momN).toFixed(3)),
+      sentiment: Number((0.30*sentN).toFixed(3)),
+      tech: Number((0.20*scoreN).toFixed(3)),
+      options: Number((0.15*optBias).toFixed(3)),
+    }
+  });
     } catch {}
   }
 
@@ -496,5 +619,74 @@ router.get('/stocks/:symbol/yahoo-full', asyncHandler(async (req, res) => {
     fetchYahooDaily(symbol, range, interval).catch(()=>null),
     fetchYahooQuoteSummary(symbol, modules).catch(()=>null)
   ]);
+  try { upsertYahooCache({ symbol, range, interval, quote, summary, chart }); } catch {}
   res.json({ ok: true, data: { symbol, quote, chart, summary } });
+}));
+
+// Yahoo via python yahoo_fin aggregator (best-effort). Requires python + yahoo_fin installed.
+router.get('/stocks/:symbol/yahoo-fin', asyncHandler(async (req, res) => {
+  const input = String(req.params.symbol || '').toUpperCase();
+  const symbol = resolveTicker(input, 'yahoo');
+  const period = String(req.query.period || '1y');
+  const interval = String(req.query.interval || '1d');
+
+  // Pick python executable (windows-friendly)
+  const candidates = ['python', 'python3', 'py'];
+  const args = ['server/scripts/yahoo_fin_fetch.py', symbol, '--period', period, '--interval', interval];
+
+  function runOnce(bin: string): Promise<{ code: number, stdout: string, stderr: string }> {
+    return new Promise((resolve) => {
+      const child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (d) => { stdout += String(d); });
+      child.stderr.on('data', (d) => { stderr += String(d); });
+      child.on('close', (code) => resolve({ code: code ?? 0, stdout, stderr }));
+    });
+  }
+
+  // Try each candidate
+  let last: any = null;
+  for (const bin of candidates) {
+    // eslint-disable-next-line no-await-in-loop
+    const r = await runOnce(bin);
+    if (r && r.stdout) {
+      try {
+        const json = JSON.parse(r.stdout);
+        if (json && typeof json === 'object') {
+          return res.json(json);
+        }
+      } catch (e) {
+        last = { bin, error: String(e), stderr: r.stderr?.slice(0, 500) };
+        continue;
+      }
+    }
+    last = { bin, code: r.code, stderr: r.stderr?.slice(0, 500) };
+  }
+  return res.status(501).json({ ok: false, error: 'python_yahoo_fin_unavailable', detail: last });
+}));
+
+// Yahoo: read cached quote/summary/chart from DB (if available)
+router.get('/stocks/:symbol/yahoo-cache', asyncHandler(async (req, res) => {
+  const input = String(req.params.symbol || '').toUpperCase();
+  const symbol = resolveTicker(input, 'yahoo');
+  const range = req.query.range ? String(req.query.range) : '';
+  const interval = req.query.interval ? String(req.query.interval) : '';
+  const withData = String(req.query.withData ?? 'true').toLowerCase() !== 'false';
+  if (range && interval) {
+    const row = db.prepare(`SELECT symbol,range,interval,quote,summary,chart,fetched_at FROM yahoo_cache WHERE symbol=? AND range=? AND interval=?`).get(symbol, range, interval) as any;
+    if (!row) return res.status(404).json({ ok:false, error:'cache_not_found' });
+    if (withData) {
+      try {
+        row.quote = row.quote ? JSON.parse(String(row.quote)) : null;
+        row.summary = row.summary ? JSON.parse(String(row.summary)) : null;
+        row.chart = row.chart ? JSON.parse(String(row.chart)) : null;
+      } catch {}
+    } else {
+      delete row.quote; delete row.summary; delete row.chart;
+    }
+    return res.json({ ok:true, data: row });
+  }
+  const rows = db.prepare(`SELECT range,interval,fetched_at FROM yahoo_cache WHERE symbol=? ORDER BY fetched_at DESC`).all(symbol) as Array<any>;
+  return res.json({ ok:true, data: rows });
 }));

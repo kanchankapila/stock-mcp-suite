@@ -6,6 +6,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p .",
     "start": "node dist/index.js",
+    "docs:diagrams": "mmdc -i ../docs/diagrams/current.mmd -o ../docs/diagrams/current.svg && mmdc -i ../docs/diagrams/current.mmd -o ../docs/diagrams/current.png && mmdc -i ../docs/diagrams/recommended.mmd -o ../docs/diagrams/recommended.svg && mmdc -i ../docs/diagrams/recommended.mmd -o ../docs/diagrams/recommended.png",
     "rag:reindex": "tsx scripts/rag-reindex.ts",
     "rag:migrate": "tsx scripts/rag-migrate.ts",
     "rag:build:batch": "tsx scripts/rag-build-batch.ts",
@@ -15,6 +16,7 @@
     "alpha:fetch": "node --loader ts-node/esm scripts/alpha-fetch.ts AAPL"
   },
   "dependencies": {
+    "@huggingface/inference": "^4.7.1",
     "@langchain/community": "^0.3.13",
     "@langchain/openai": "^0.3.8",
     "better-sqlite3": "^9.5.0",
@@ -31,6 +33,7 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@mermaid-js/mermaid-cli": "^10.9.1",
     "@types/express": "^4.17.21",
     "ts-node": "^10.9.2",
     "tsx": "^4.7.0",

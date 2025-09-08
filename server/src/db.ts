@@ -89,6 +89,28 @@ CREATE TABLE IF NOT EXISTS analyses(
   recommendation TEXT
 );
 
+-- Options metrics cache (daily)
+CREATE TABLE IF NOT EXISTS options_metrics(
+  symbol TEXT,
+  date TEXT,
+  pcr REAL,   -- Put/Call Open Interest ratio (or volume-based if OI missing)
+  pvr REAL,   -- Put/Call Volume ratio
+  bias REAL,  -- [-1,1] bullish(+)/bearish(-) derived from OI distribution
+  PRIMARY KEY(symbol, date)
+);
+
+-- Yahoo cache: store last fetched quote/summary/chart per (symbol,range,interval)
+CREATE TABLE IF NOT EXISTS yahoo_cache(
+  symbol TEXT,
+  range TEXT,
+  interval TEXT,
+  quote TEXT,
+  summary TEXT,
+  chart TEXT,
+  fetched_at TEXT,
+  PRIMARY KEY(symbol, range, interval)
+);
+
 -- History of Top Picks snapshots (per day per symbol)
 CREATE TABLE IF NOT EXISTS top_picks_history(
   snapshot_date TEXT,
@@ -219,5 +241,52 @@ export function saveAnalysis(a: {symbol:string, created_at:string, sentiment_sco
   } catch (err) {
     logger.error({ err, symbol: a.symbol }, 'analysis_insert_failed');
     throw err;
+  }
+}
+
+export function upsertOptionsMetrics(row: { symbol: string; date: string; pcr: number|null; pvr: number|null; bias: number|null }) {
+  try {
+    const stmt = db.prepare(`INSERT OR REPLACE INTO options_metrics(symbol,date,pcr,pvr,bias) VALUES(?,?,?,?,?)`);
+    stmt.run(row.symbol, row.date, (row.pcr ?? null), (row.pvr ?? null), (row.bias ?? null));
+  } catch (err) {
+    logger.warn({ err, symbol: row.symbol }, 'options_metrics_upsert_failed');
+  }
+}
+
+export function getLatestOptionsBias(symbol: string): number | null {
+  try {
+    const r = db.prepare(`SELECT bias FROM options_metrics WHERE symbol=? ORDER BY date DESC LIMIT 1`).get(symbol) as { bias: number } | undefined;
+    const b = r?.bias;
+    return (typeof b === 'number' && Number.isFinite(b)) ? b : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+export function upsertYahooCache(params: { symbol: string, range: string, interval: string, quote: any, summary: any, chart: any }) {
+  try {
+    const stmt = db.prepare(`INSERT INTO yahoo_cache(symbol,range,interval,quote,summary,chart,fetched_at)
+                             VALUES(?,?,?,?,?,?,?)
+                             ON CONFLICT(symbol,range,interval)
+                               DO UPDATE SET quote=excluded.quote, summary=excluded.summary, chart=excluded.chart, fetched_at=excluded.fetched_at`);
+    stmt.run(params.symbol, params.range, params.interval,
+             JSON.stringify(params.quote ?? null), JSON.stringify(params.summary ?? null), JSON.stringify(params.chart ?? null),
+             new Date().toISOString());
+  } catch (err) {
+    logger.warn({ err, symbol: params.symbol }, 'yahoo_cache_upsert_failed');
+  }
+}
+
+export function listOptionsMetrics(symbol: string, opts?: { days?: number; limit?: number }) {
+  try {
+    const days = Number.isFinite(Number(opts?.days)) ? Number(opts?.days) : 30;
+    const limit = Number.isFinite(Number(opts?.limit)) ? Math.max(1, Math.min(365, Number(opts?.limit))) : 90;
+    const cutoff = new Date(Date.now() - Math.max(1, days) * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const stmt = db.prepare(`SELECT date, pcr, pvr, bias FROM options_metrics WHERE symbol=? AND date>=? ORDER BY date ASC LIMIT ?`);
+    const rows = stmt.all(symbol, cutoff, limit) as Array<{ date: string; pcr: number|null; pvr: number|null; bias: number|null }>;
+    return rows;
+  } catch (err) {
+    logger.warn({ err, symbol, opts }, 'options_metrics_query_failed');
+    return [] as Array<{ date: string; pcr: number|null; pvr: number|null; bias: number|null }>;
   }
 }

@@ -40,6 +40,15 @@ export class Api {
     return res.json();
   }
 
+  async optionsMetrics(symbol: string, days=60, limit=90) {
+    const url = new URL(`${this.base}/api/stocks/${symbol}/options-metrics`, window.location.origin);
+    url.searchParams.set('days', String(days));
+    url.searchParams.set('limit', String(limit));
+    const res = await fetch(url.toString());
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+
   async analyze(symbol: string) {
     const res = await fetch(`${this.base}/api/stocks/${symbol}/analyze`, { method:'POST' });
     if (!res.ok) throw new Error(await res.text());

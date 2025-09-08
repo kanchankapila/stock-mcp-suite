@@ -1,0 +1,49 @@
+# Ingestion Matrix
+
+| Category | Path/Name | Method | Sources | Writes (tables) | Writes (schemas) | Schema Refs | Frequency | Code Ref |
+|---|---|---|---|---|---|---|---|---|
+| HTTP | /api/ingest/:symbol | POST | Yahoo Chart; Stooq CSV (fallback); NewsAPI Everything; Moneycontrol Insights | prices, news, stocks, rag_embeddings (if RAG_STORE=sqlite) | prices(symbol,date,open,high,low,close,volume); news(id,symbol,date,title,summary,url,sentiment); stocks(symbol,name); rag_embeddings(ns,id,text,metadata,vector) | server/src/db.ts:25; server/src/db.ts:32; server/src/db.ts:20; server/src/db.ts:62 | On-demand | server/src/routes/stocks.ts:22 |
+| HTTP | /api/stocks/yahoo/ingest/:symbol | POST | Yahoo Chart | prices, stocks | prices(symbol,date,open,high,low,close,volume); stocks(symbol,name) | server/src/db.ts:25; server/src/db.ts:20 | On-demand | server/src/routes/stocks.ts:469 |
+| HTTP | /api/stocks/:symbol/mc-tech | GET | Moneycontrol TechIndicator (D/W/M) | mc_tech | mc_tech(symbol,freq,data,updated_at) | server/src/db.ts:46 | On-demand (cached on fetch) | server/src/routes/stocks.ts:349 |
+| HTTP | /api/top-picks/snapshot | POST | Internal compute (from prices, news, mc_tech) | top_picks_history | top_picks_history(snapshot_date,symbol,score,momentum,sentiment,mc_score,recommendation,created_at) | server/src/db.ts:93 | On-demand (also at startup) | server/src/routes/stocks.ts:439 |
+| HTTP | /api/stocks/:symbol/analyze | POST | Internal compute | analyses | analyses(id,symbol,created_at,sentiment_score,predicted_close,strategy,score,recommendation) | server/src/db.ts:81 | On-demand | server/src/routes/stocks.ts:175 |
+| HTTP | /api/rag/index | POST | URLs (Cheerio), texts | rag_url_status; rag_embeddings (sqlite) or vector store | rag_url_status(ns,url,last_indexed,status,note); rag_embeddings(ns,id,text,metadata,vector) | server/src/db.ts:72; server/src/db.ts:62 | On-demand | server/src/routes/rag.ts:14 |
+| HTTP | /api/rag/reindex/:symbol | POST | DB news rows; Trendlyne Adv-Tech | rag_embeddings (sqlite) or vector store | rag_embeddings(ns,id,text,metadata,vector) | server/src/db.ts:62 | On-demand | server/src/routes/rag.ts:65 |
+| HTTP | /api/rag/admin/build-batch | POST | DB news rows (all symbols) | rag_embeddings (sqlite) or vector store | rag_embeddings(ns,id,text,metadata,vector) | server/src/db.ts:62 | On-demand / startup | server/src/routes/rag.ts:249 |
+| HTTP | /api/rag/admin/migrate | POST | Existing rag_embeddings | rag_embeddings (sqlite) or vector store | rag_embeddings(ns,id,text,metadata,vector) | server/src/db.ts:62 | On-demand / startup | server/src/routes/rag.ts:278 |
+| HTTP | /api/rag/ns/:ns | DELETE | (delete) | deletes rag_embeddings, rag_url_status | rag_embeddings(ns,id,text,metadata,vector); rag_url_status(ns,url,last_indexed,status,note) | server/src/db.ts:62; server/src/db.ts:72 | On-demand | server/src/routes/rag.ts:235 |
+| HTTP | /api/stocks/:symbol/overview | GET | DB (prices) | - | - | On-demand | server/src/routes/stocks.ts:147 |
+| HTTP | /api/stocks/:symbol/history | GET | DB (prices) | - | - | On-demand | server/src/routes/stocks.ts:163 |
+| HTTP | /api/stocks/:symbol/news | GET | DB (news) | - | - | On-demand | server/src/routes/stocks.ts:169 |
+| HTTP | /api/stocks/:symbol/db | GET | DB (counts, ranges) | - | - | On-demand | server/src/routes/stocks.ts:368 |
+| HTTP | /api/stocks/list | GET | stocklist | - | - | On-demand | server/src/routes/stocks.ts:387 |
+| HTTP | /api/top-picks | GET | DB compute (prices, news, mc_tech) | - | - | On-demand | server/src/routes/stocks.ts:394 |
+| HTTP | /api/top-picks/history | GET | DB (top_picks_history) | - | - | On-demand | server/src/routes/stocks.ts:459 |
+| HTTP | /api/stocks/:symbol/yahoo-full | GET | Yahoo quote/chart/quoteSummary | - | - | On-demand | server/src/routes/stocks.ts:487 |
+| HTTP | /api/resolve/:input | GET | Resolver | - | - | On-demand | server/src/routes/stocks.ts:287 |
+| HTTP | /api/resolve/providers | GET | Resolver | - | - | On-demand | server/src/routes/stocks.ts:223 |
+| HTTP | /api/agent | GET | LLM (no DB write) | - | - | On-demand | server/src/routes/stocks.ts:203 |
+| HTTP | /api/agent/stream | POST | LLM (SSE) | - | - | On-demand | server/src/routes/stocks.ts:210 |
+| HTTP | /api/external/et/indices | GET | etmarketsapis | - | - | On-demand | server/src/routes/external.ts:12 |
+| HTTP | /api/external/et/sector-performance | GET | etmarketsapis | - | - | On-demand | server/src/routes/external.ts:17 |
+| HTTP | /api/external/et/index-constituents | GET | etmarketsapis | - | - | On-demand | server/src/routes/external.ts:23 |
+| HTTP | /api/external/mc/price-volume | GET | api.moneycontrol.com | - | - | On-demand | server/src/routes/external.ts:32 |
+| HTTP | /api/external/mc/stock-history | GET | priceapi.moneycontrol.com | - | - | On-demand | server/src/routes/external.ts:43 |
+| HTTP | /api/external/mc/quick | GET | Multiple MC endpoints | - | - | On-demand | server/src/routes/external.ts:58 |
+| HTTP | /api/external/mc/tech | GET | priceapi.moneycontrol.com (RSI) | - | - | On-demand | server/src/routes/external.ts:78 |
+| HTTP | /api/external/trendlyne/adv-tech | GET | trendlyne.com public API | - | - | On-demand | server/src/routes/external.ts:91 |
+| HTTP | /api/external/trendlyne/derivatives | GET | trendlyne.com F&O APIs | - | - | On-demand | server/src/routes/external.ts:122 |
+| HTTP | /api/external/trendlyne/cookie-status | GET | - | - | - | On-demand | server/src/routes/external.ts:139 |
+| HTTP | /api/external/trendlyne/sma | GET | trendlyne.com SMA API (cookie-backed) | - | - | On-demand | server/src/routes/external.ts:144 |
+| HTTP | /api/external/trendlyne/cookie-dump | GET | - | - | - | On-demand | server/src/routes/external.ts:184 |
+| HTTP | /api/external/trendlyne/cookie-refresh | POST | Headless login (puppeteer) | - (writes cookie file only) | - | On-demand | server/src/routes/external.ts:195 |
+| HTTP | /api/external/tickertape/mmi | GET | api.tickertape.in | - | - | On-demand | server/src/routes/external.ts:200 |
+| HTTP | /api/external/marketsmojo/valuation | GET | frapi.marketsmojo.com | - | - | On-demand | server/src/routes/external.ts:205 |
+| WS | /ws | - | Yahoo Quote Batch; Yahoo Chart fallback | prices, stocks | prices(symbol,date,open,high,low,close,volume); stocks(symbol,name) | server/src/db.ts:25; server/src/db.ts:20 | ~10s poll base (backoff/decay) | server/src/ws/live.ts:11 |
+| Background | Yahoo Prefetcher | - | Yahoo Quote Batch; Yahoo Chart fallback | prices, stocks | prices(symbol,date,open,high,low,close,volume); stocks(symbol,name) | server/src/db.ts:25; server/src/db.ts:20 | Every 1 min (configurable) | server/src/providers/prefetch.ts:45 |
+| Background | News Prefetch | - | NewsAPI Everything | news | news(id,symbol,date,title,summary,url,sentiment) | server/src/db.ts:32 | Every 5 min; 15 min cooldown on 429 | server/src/providers/prefetch.ts:132 |
+| Background | MC Tech Prefetch | - | pricefeed/techindicator D/W/M | mc_tech | mc_tech(symbol,freq,data,updated_at) | server/src/db.ts:46 | With news prefetch batches | server/src/providers/prefetch.ts:210 |
+| Background | Trendlyne Cookie Refresh | - | Headless login | - (cookie file only) | - | ~11h interval (backoff) | server/src/providers/trendlyneHeadless.ts:132 |
+| Background | RAG Auto Migrate | - | rag_embeddings | rag store | rag_embeddings(ns,id,text,metadata,vector) | Startup (if enabled) | server/src/rag/auto.ts:13 |
+| Background | RAG Auto Build Batch | - | DB news rows | rag store | rag_embeddings(ns,id,text,metadata,vector) | Startup (if enabled) | server/src/rag/auto.ts:25 |
+| Background | Daily Top Picks Snapshot | - | Internal compute | top_picks_history | top_picks_history(snapshot_date,symbol,score,momentum,sentiment,mc_score,recommendation,created_at) | Startup (once/day de-duped) | server/src/rag/auto.ts:83 |

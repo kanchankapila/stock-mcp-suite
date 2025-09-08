@@ -1,0 +1,10 @@
+Table,Columns,Primary Key,File Ref
+stocks,"symbol TEXT, name TEXT","symbol","server/src/db.ts:20"
+prices,"symbol TEXT, date TEXT, open REAL, high REAL, low REAL, close REAL, volume INTEGER","symbol,date","server/src/db.ts:25"
+news,"id TEXT, symbol TEXT, date TEXT, title TEXT, summary TEXT, url TEXT, sentiment REAL","id","server/src/db.ts:32"
+mc_tech,"symbol TEXT, freq TEXT, data TEXT, updated_at TEXT","symbol,freq","server/src/db.ts:46"
+docs,"id INTEGER AUTOINCREMENT, symbol TEXT, chunk TEXT, terms TEXT","id","server/src/db.ts:54"
+rag_embeddings,"ns TEXT, id TEXT, text TEXT, metadata TEXT, vector TEXT","ns,id","server/src/db.ts:62"
+rag_url_status,"ns TEXT, url TEXT, last_indexed TEXT, status TEXT, note TEXT","ns,url","server/src/db.ts:72"
+analyses,"id INTEGER AUTOINCREMENT, symbol TEXT, created_at TEXT, sentiment_score REAL, predicted_close REAL, strategy JSON, score REAL, recommendation TEXT","id","server/src/db.ts:81"
+top_picks_history,"snapshot_date TEXT, symbol TEXT, score REAL, momentum REAL, sentiment REAL, mc_score REAL, recommendation TEXT, created_at TEXT","snapshot_date,symbol","server/src/db.ts:93"
