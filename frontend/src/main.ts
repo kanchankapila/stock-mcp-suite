@@ -205,7 +205,7 @@ root.innerHTML = `
     <div class="wrap">
       <div class="brand"><span class="dot"></span> Stock Analytics</div>
       <div class="searchbar">
-        <input id="globalSearch" placeholder="Search stocks (name/symbol)…" list="stocksList" />
+        <input id="globalSearch" placeholder="Search stocks (name/symbol)ï¿½" list="stocksList" />
       </div>
       <div class="toolbar">
         <div class="tabs" id="tfTabs" aria-label="Timeframe Tabs">
@@ -664,7 +664,7 @@ const _ph = document.querySelector('#stockSelect option[disabled]') as HTMLOptio
     const raw = urlsTa.value || '';
     const urls = raw.split(/\s+/g).filter(u => /^https?:\/\//i.test(u));
     if (!urls.length) { urlsStatus.textContent = 'Provide at least one valid URL (http/https).'; return; }
-    urlsStatus.innerHTML = '<span class="spinner"></span>Indexing URLs…';
+    urlsStatus.innerHTML = '<span class="spinner"></span>Indexing URLsï¿½';
     try {
       const res = await new Api().ragIndex(ns, urls);
       urlsStatus.textContent = `Indexed ${res?.added ?? urls.length} chunks from URLs.`;
@@ -680,7 +680,7 @@ const _ph = document.querySelector('#stockSelect option[disabled]') as HTMLOptio
     if (!txt) { textStatus.textContent = 'Paste some text to index.'; return; }
     const d = (textDate?.value || new Date().toISOString().slice(0,10));
     const src = (textSource?.value || 'manual');
-    textStatus.innerHTML = '<span class="spinner"></span>Indexing text…';
+    textStatus.innerHTML = '<span class="spinner"></span>Indexing textï¿½';
     try {
       const res = await fetch('/api/rag/index', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ namespace: ns, texts: [{ text: txt, metadata: { date: d, source: src } }] }) });
       if (!res.ok) throw new Error(await res.text());
@@ -720,7 +720,7 @@ const _ph = document.querySelector('#stockSelect option[disabled]') as HTMLOptio
     const daysStr = (document.getElementById('ragDays') as HTMLInputElement | null)?.value || '';
     const n = Number(daysStr || 0);
     const days = (Number.isFinite(n) && n>0) ? n : tfWindowDays(getTimeframe());
-    if (hint) hint.innerHTML = '<span class="spinner"></span>Reindexing…';
+    if (hint) hint.innerHTML = '<span class="spinner"></span>Reindexingï¿½';
     try {
       const qs = new URLSearchParams({ days: String(days), includeTl: String(tlCk.checked), includeYahoo: String(yhCk.checked), includeMc: String(mcCk.checked) });
       const res = await fetch(`/api/rag/reindex/${encodeURIComponent(ns)}?${qs.toString()}`, { method:'POST' });
@@ -749,13 +749,13 @@ const _ph = document.querySelector('#stockSelect option[disabled]') as HTMLOptio
   listBtn.addEventListener('click', async () => {
     const ns = nsSel?.value || '';
     if (!ns) { docsBox.textContent = 'Select a symbol first.'; return; }
-    docsBox.innerHTML = '<span class="spinner"></span>Loading…';
+    docsBox.innerHTML = '<span class="spinner"></span>Loadingï¿½';
     try {
       const res = await fetch(`/api/rag/docs/${encodeURIComponent(ns)}?withText=true&limit=50`);
       const json = await res.json();
       if (!res.ok || json?.ok===false) throw new Error(json?.error || await res.text());
       const arr = Array.isArray(json?.data) ? json.data : [];
-      docsBox.textContent = arr.length ? arr.map((d:any,i:number)=> `${i+1}. [${d.date || '—'}] (${d.source || 'unknown'}) ${d.excerpt || ''}`).join('\n\n') : 'No docs found.';
+      docsBox.textContent = arr.length ? arr.map((d:any,i:number)=> `${i+1}. [${d.date || 'ï¿½'}] (${d.source || 'unknown'}) ${d.excerpt || ''}`).join('\n\n') : 'No docs found.';
     } catch (e:any) {
       docsBox.textContent = String(e?.message || e);
     }
@@ -1069,7 +1069,7 @@ async function updateResolverCard(input: string) {
   const out = document.getElementById('resolveOutput');
   if (!out) return;
   if (!input) { out.textContent = ''; return; }
-  out.textContent = 'Resolving…';
+  out.textContent = 'Resolvingï¿½';
   try {
     const res = await new Api().resolveTicker(input);
     const data = res?.data || {};
@@ -1105,7 +1105,7 @@ renderMarketOverview().catch(()=>{});
   const symbolInput = document.getElementById('symbol') as HTMLInputElement | null;
   if (!sel) return;
   // Show loading placeholder
-  sel.innerHTML = '<option value="" selected disabled>Loading…</option>';
+  sel.innerHTML = '<option value="" selected disabled>Loadingï¿½</option>';
   try {
     console.log('Fetching stock list...');
     const res = await new Api().listStocks();
@@ -1372,7 +1372,7 @@ renderMarketOverview().catch(()=>{});
           } catch {}
           const wkHtml = (y52h || y52l) ? `
             <div class="muted" style="margin-top:10px">52W Range (Yahoo)</div>
-            <div style="font-size:12px">${y52l ?? 'N/A'} — ${y52h ?? 'N/A'}</div>
+            <div style="font-size:12px">${y52l ?? 'N/A'} ï¿½ ${y52h ?? 'N/A'}</div>
           ` : '';
           // Render
           quickCard.innerHTML = `
@@ -1586,7 +1586,7 @@ async function renderMcPriceVolume(symbol: string) {
   if (btn) {
     btn.addEventListener('click', async ()=>{
       try {
-        if (status) status.textContent = 'Refreshing cookie…';
+        if (status) status.textContent = 'Refreshing cookieï¿½';
         await new Api().tlCookieRefresh();
         if (status) status.textContent = 'Cookie refreshed';
         const sel = document.getElementById('stockSelect') as HTMLSelectElement | null;
@@ -1670,7 +1670,7 @@ async function renderMcTech(symbol: string, pivotType = 'classic', freq: 'D'|'W'
             <div style="font-weight:600; color: ${sentimentColor}; margin-bottom: 6px;">Sentiment: ${escapeHtml(d.sentiments?.indication || 'N/A')}</div>
             <canvas id="mcTechPie" width="140" height="140"></canvas>
             <div class="muted" style="font-size:12px; text-align:center; margin-top:4px;">
-              ${d.sentiments?.totalBullish} Bullish • ${d.sentiments?.totalNeutral} Neutral • ${d.sentiments?.totalBearish} Bearish
+              ${d.sentiments?.totalBullish} Bullish ï¿½ ${d.sentiments?.totalNeutral} Neutral ï¿½ ${d.sentiments?.totalBearish} Bearish
             </div>
           </div>
           <div>
@@ -2048,7 +2048,7 @@ async function renderTrendlyneAdvTech(symbol: string) {
       const pivotLong = String((params as any)?.pivot_level?.insight?.longtext || (params as any)?.pivot_level?.insight?.shorttext || '');
       el.innerHTML = `
         <div class="kpi">
-          <div class="section-title" style="margin-top:0">Moving Averages (Days) — SMA vs EMA</div>
+          <div class="section-title" style="margin-top:0">Moving Averages (Days) ï¿½ SMA vs EMA</div>
           <canvas id="tlMaBars" style="max-height:220px"></canvas>
         </div>
         <div class="grid-2" style="gap:12px; margin-top:8px">
@@ -2060,7 +2060,7 @@ async function renderTrendlyneAdvTech(symbol: string) {
             </div>
           </div>
           <div class="kpi">
-            <div class="section-title" style="margin-top:0">Oscillators — Values</div>
+            <div class="section-title" style="margin-top:0">Oscillators ï¿½ Values</div>
             <canvas id="tlOscBars" style="max-height:220px"></canvas>
           </div>
         </div>
@@ -2164,7 +2164,7 @@ async function renderTrendlyneAdvTech(symbol: string) {
         }
       } catch {}
 
-      // Parameter cards — present each parameter in its own enriched card
+      // Parameter cards ï¿½ present each parameter in its own enriched card
       try {
         const cards: string[] = [];
 
@@ -2569,7 +2569,7 @@ async function renderTrendlyneAdvTech(symbol: string) {
                 <div class=\"kpi\" style=\"margin-top:8px\">
                   <div class=\"section-title\" style=\"margin-top:0\">Executive Summary</div>
                   <ul style=\"margin:6px 0 0 18px\">
-                    <li><b>${escapeHtml(decision)}</b> — Buy ${buyPct.toFixed(0)}%, Neutral ${ (100 - buyPct - sellPct).toFixed(0)}%, Sell ${sellPct.toFixed(0)}%.</li>
+                    <li><b>${escapeHtml(decision)}</b> ï¿½ Buy ${buyPct.toFixed(0)}%, Neutral ${ (100 - buyPct - sellPct).toFixed(0)}%, Sell ${sellPct.toFixed(0)}%.</li>
                     <li>Score: ${escapeHtml(String((adv as any).score ?? '-'))}; Signal: ${escapeHtml(String((adv as any).signal ?? (adv as any).trend ?? '-'))}.</li>
                     <li>Top bullish: ${tb || '<span class=\"muted\">n/a</span>'}</li>
                     <li>Top bearish: ${tr || '<span class=\"muted\">n/a</span>'}</li>
@@ -2681,7 +2681,7 @@ async function renderTrendlyneAdvTech(symbol: string) {
               <div class=\"kpi\" style=\"margin-top:8px\">
                 <div class=\"section-title\" style=\"margin-top:0\">Executive Summary</div>
                 <ul style=\"margin:6px 0 0 18px\">
-                  <li><b>${escapeHtml(decision)}</b> — Buy ${buyPct.toFixed(0)}%, Neutral ${ (100 - buyPct - sellPct).toFixed(0)}%, Sell ${sellPct.toFixed(0)}%.</li>
+                  <li><b>${escapeHtml(decision)}</b> ï¿½ Buy ${buyPct.toFixed(0)}%, Neutral ${ (100 - buyPct - sellPct).toFixed(0)}%, Sell ${sellPct.toFixed(0)}%.</li>
                   <li>Score: ${escapeHtml(String((adv as any).score ?? '-'))}; Signal: ${escapeHtml(String((adv as any).signal ?? (adv as any).trend ?? '-'))}.</li>
                   <li>Top bullish: ${tb || '<span class=\"muted\">n/a</span>'}</li>
                   <li>Top bearish: ${tr || '<span class=\"muted\">n/a</span>'}</li>
@@ -2727,7 +2727,7 @@ async function renderTrendlyneAdvTech(symbol: string) {
 async function renderTrendlyneSma(symbol: string) {
   const box = document.getElementById('tlSmaBody');
   if (!box) return;
-  box.innerHTML = '<div class="muted">Loading SMA…</div>';
+  box.innerHTML = '<div class="muted">Loading SMAï¿½</div>';
   try {
     // Prefer TLID if available
     const base = symbol.includes('.') ? symbol.split('.')[0] : symbol;
@@ -2806,7 +2806,7 @@ async function renderTrendlyneSma(symbol: string) {
 async function renderMarketsMojo() {
   const box = document.getElementById('mmBody');
   if (!box) return;
-  box.innerHTML = '<div class="muted">Loading valuation…</div>';
+  box.innerHTML = '<div class="muted">Loading valuationï¿½</div>';
   try {
     const res = await new Api().marketsMojoValuation();
     const data = res?.data;
@@ -2821,7 +2821,7 @@ async function renderMarketsMojo() {
         <div class="section-title" style="margin-top:0">Valuation Snapshot</div>
         <div style="display:flex; gap:6px; flex-wrap:wrap">${chips || '<span class="muted">No quick fields</span>'}</div>
         <div class="section-title" style="margin-top:8px">Details</div>
-        <div class="mono" style="white-space:pre-wrap">${snippet}${JSON.stringify(data).length>360?'…':''}</div>
+        <div class="mono" style="white-space:pre-wrap">${snippet}${JSON.stringify(data).length>360?'ï¿½':''}</div>
       </div>`;
     box.insertAdjacentHTML('beforeend', `<div class=\"muted\" style=\"font-size:11px; margin-top:6px\">Source: /api/external/marketsmojo/valuation</div>`);
   } catch (e:any) {
@@ -2832,7 +2832,7 @@ async function renderMarketsMojo() {
 async function renderProviderResolution(symbol: string) {
   const box = document.getElementById('resolveBody');
   if (!box) return;
-  box.innerHTML = '<div class="muted">Resolving…</div>';
+  box.innerHTML = '<div class="muted">Resolvingï¿½</div>';
   try {
     const res = await new Api().resolveTicker(symbol);
     const d = res?.data || {};
@@ -2855,36 +2855,64 @@ async function renderProviderResolution(symbol: string) {
 async function renderYahooData(symbol: string) {
   const body = document.getElementById('yahooDataBody');
   if (!body) return;
-  body.innerHTML = '<div class="muted">Loading Yahoo…</div>';
+  body.innerHTML = `<div class="muted">Loading Yahoo Data...</div>`;
   try {
-  const rSel = document.getElementById('ydRange') as HTMLSelectElement | null;
-  const iSel = document.getElementById('ydInterval') as HTMLSelectElement | null;
-  // Persist Yahoo controls
-  const yKey = 'yahoo:';
-  const range = rSel?.value || localStorage.getItem(yKey+'range') || '1y';
-  const interval = iSel?.value || localStorage.getItem(yKey+'interval') || '1d';
-  if (rSel) rSel.value = range;
-  if (iSel) iSel.value = interval;
-  const boxes = Array.from(document.querySelectorAll('input[id^="ydm_"]')) as HTMLInputElement[];
-  // Restore modules from storage
-  const savedMods = (localStorage.getItem(yKey+'modules') || '').split(',').filter(Boolean);
-  if (savedMods.length) boxes.forEach(b => { b.checked = savedMods.includes(b.id.replace('ydm_','')); });
-  const modules = boxes.filter(b=>b.checked).map(b=>b.id.replace('ydm_','')).join(',') || 'price,summaryDetail';
-  // Save back current selections
-  try { localStorage.setItem(yKey+'range', range); localStorage.setItem(yKey+'interval', interval); localStorage.setItem(yKey+'modules', modules); } catch {}
-    const res = await new Api().yahooFull(symbol, range, interval, modules);
-    const q = res?.data?.quote;
-    const price = typeof q?.price === 'number' ? q.price.toFixed(2) : 'N/A';
-    const sum = escapeHtml(JSON.stringify(res?.data?.summary || {}).slice(0, 320));
-    body.innerHTML = `<div class="grid-2" style="gap:8px; font-size:12px">
-      <div><div class="muted">Price</div><div>${price}</div></div>
-      <div><div class="muted">Modules</div><div>${escapeHtml(modules)}</div></div>
-    </div>
-    <div class="section-title" style="margin-top:8px">Summary</div>
-    <div class="mono" style="white-space:pre-wrap">${sum}${JSON.stringify(res?.data?.summary||{}).length>320?'…':''}</div>
-    <div class="muted" style="font-size:11px; margin-top:6px">Source: /api/stocks/${escapeHtml(symbol)}/yahoo-full?range=${escapeHtml(range)}&interval=${escapeHtml(interval)}&modules=${escapeHtml(modules)}</div>`;
-  } catch (e:any) {
-    body.innerHTML = `<div class="mono" style="color:#ff6b6b">${escapeHtml(e?.message||e)}</div>`;
+    const rangeSel = document.getElementById('ydRange') as HTMLSelectElement | null;
+    const intervalSel = document.getElementById('ydInterval') as HTMLSelectElement | null;
+    const modules = [
+      ...(document.getElementById('ydm_price') as HTMLInputElement)?.checked ? ['price'] : [],
+      ...(document.getElementById('ydm_summaryDetail') as HTMLInputElement)?.checked ? ['summaryDetail'] : [],
+      ...(document.getElementById('ydm_assetProfile') as HTMLInputElement)?.checked ? ['assetProfile'] : [],
+      ...(document.getElementById('ydm_financialData') as HTMLInputElement)?.checked ? ['financialData'] : [],
+      ...(document.getElementById('ydm_defaultKeyStatistics') as HTMLInputElement)?.checked ? ['defaultKeyStatistics'] : [],
+      ...(document.getElementById('ydm_earnings') as HTMLInputElement)?.checked ? ['earnings'] : [],
+      ...(document.getElementById('ydm_calendarEvents') as HTMLInputElement)?.checked ? ['calendarEvents'] : [],
+      ...(document.getElementById('ydm_recommendationTrend') as HTMLInputElement)?.checked ? ['recommendationTrend'] : [],
+      ...(document.getElementById('ydm_secFilings') as HTMLInputElement)?.checked ? ['secFilings'] : [],
+      ...(document.getElementById('ydm_incomeStatementHistory') as HTMLInputElement)?.checked ? ['incomeStatementHistory'] : [],
+    ];
+    const range = rangeSel?.value || '1y';
+    const interval = intervalSel?.value || '1d';
+    const mods = modules.length ? modules.join(',') : 'price,summaryDetail,assetProfile,financialData,defaultKeyStatistics';
+    const yf = await api.yahooFull(symbol, range, interval, mods);
+    if (yf && yf.data) {
+      // Extract KPIs, profile, and financials
+      const info = yf.data?.info || yf.data?.profile || {};
+      const qt = yf.data?.quote_table || yf.data?.quote || {};
+      const sector = info.sector || info.Sector || '';
+      const industry = info.industry || info.Industry || '';
+      const website = info.website || info.Website || '';
+      const summary = info.longBusinessSummary || info.long_business_summary || '';
+      const mcap = qt['Market Cap'] || qt['Market Cap (intraday)'] || qt.marketCap || '';
+      const pe = qt['PE Ratio (TTM)'] || qt.peRatio || '';
+      const eps = qt['EPS (TTM)'] || qt.eps || '';
+      // Financials
+      const financials = yf.data?.financials || yf.data?.financialData || {};
+      // Render card
+      body.innerHTML = `
+        <div class="muted">Yahoo Fin KPIs & Profile</div>
+        <div class="grid-2" style="gap:16px; margin-top:8px">
+          <div>
+            <div><strong>Sector:</strong> ${escapeHtml(sector)}</div>
+            <div><strong>Industry:</strong> ${escapeHtml(industry)}</div>
+            <div><strong>Market Cap:</strong> ${escapeHtml(String(mcap))}</div>
+            <div><strong>PE Ratio:</strong> ${escapeHtml(String(pe))}</div>
+            <div><strong>EPS:</strong> ${escapeHtml(String(eps))}</div>
+            <div><strong>Website:</strong> <a href="${escapeHtml(website)}" target="_blank">${escapeHtml(website)}</a></div>
+          </div>
+          <div>
+            <div class="muted" style="margin-bottom:4px">Business Summary</div>
+            <div style="font-size:13px;">${escapeHtml(summary)}</div>
+          </div>
+        </div>
+        <div class="muted" style="margin-top:12px">Financials</div>
+        <pre class="mono" style="white-space:pre-wrap; margin:0; font-size:12px; background:var(--panel-2); padding:8px; border-radius:8px;">${escapeHtml(JSON.stringify(financials, null, 2))}</pre>
+      `;
+    } else {
+      body.innerHTML = `<div class="muted">No Yahoo data available.</div>`;
+    }
+  } catch (e: any) {
+    body.innerHTML = `<div class="mono" style="color:#ff6b6b">${escapeHtml(e?.message || e)}</div>`;
   }
 }
 
@@ -2974,7 +3002,7 @@ async function renderYahooData(symbol: string) {
     const rows = results.map(r => {
       const color = r.ok ? 'var(--success)' : 'var(--danger)';
       const sym = r.ok ? 'OK' : 'FAIL';
-      const note = r.note ? ` — ${escapeHtml(r.note).slice(0,120)}` : '';
+      const note = r.note ? ` ï¿½ ${escapeHtml(r.note).slice(0,120)}` : '';
       return `<div><span style="color:${color}; font-weight:600">${sym}</span> ${escapeHtml(r.name)} <span class="muted">(${r.ms} ms)</span>${note}</div>`;
     }).join('');
   body.innerHTML = rows || '<div class="muted">No checks run</div>';
@@ -2985,7 +3013,7 @@ async function renderYahooData(symbol: string) {
 async function renderSuggestions() {
   const el = document.getElementById('suggestionsBody');
   if (!el) return;
-  el.innerHTML = '<div class="muted">Loading suggestions…</div>';
+  el.innerHTML = '<div class="muted">Loading suggestionsï¿½</div>';
   try {
     // Pull a small batch of stocks and score them using Overview + Trendlyne
     const listRes = await new Api().listStocks();
@@ -3048,7 +3076,7 @@ async function renderSuggestions() {
           <div style="display:flex; justify-content:space-between; gap:8px; align-items:center">
             <div>
               <div class="section-title" style="margin-top:0">${escapeHtml(r.symbol)}</div>
-              <div class="muted" style="font-size:11px">? ${r.change>=0?'+':''}${r.change.toFixed(2)}%, TL ${r.tlScore?.toFixed?.(0) ?? '-'} • Sent ${r.sentiment.toFixed(2)}</div>
+              <div class="muted" style="font-size:11px">? ${r.change>=0?'+':''}${r.change.toFixed(2)}%, TL ${r.tlScore?.toFixed?.(0) ?? '-'} ï¿½ Sent ${r.sentiment.toFixed(2)}</div>
             </div>
             <button style="padding:6px 10px; border:1px solid var(--border); border-radius:999px; background:transparent; cursor:pointer; color:${col}">${dir}</button>
           </div>
@@ -3131,7 +3159,7 @@ updateRagExplainHint();
     const q = `Explain the key events and factors affecting ${symbol} over the last ${days} days. Prioritize price drivers, fundamentals, and notable news.`;
     // Loading spinner
     try { (btn as HTMLButtonElement).disabled = true; } catch {}
-    (out as HTMLElement).innerHTML = '<span class="spinner" aria-hidden="true"></span><span class="muted">Explaining…</span>';
+    (out as HTMLElement).innerHTML = '<span class="spinner" aria-hidden="true"></span><span class="muted">Explainingï¿½</span>';
     try {
       const cutoff = new Date(Date.now() - days*24*60*60*1000).toISOString().slice(0,10);
       // Include dateCutoff to hint backend filter when available

@@ -98,7 +98,7 @@ export function listTickerProvidersFromEnv(): string[] {
     if (m) provs.add(m[1].toLowerCase());
   }
   // Ensure common defaults even if not in env
-  ['yahoo','news','alpha','mc','trendlyne'].forEach(p=> provs.add(p));
+  ['yahoo','news','alpha','mc','trendlyne','yFin'].forEach(p=> provs.add(p));
   return Array.from(provs);
 }
 

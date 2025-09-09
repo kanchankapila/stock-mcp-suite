@@ -12,6 +12,8 @@ import { logger } from '../utils/logger.js';
 import { sentimentScore } from '../analytics/sentiment.js';
 import { loadStocklist } from '../utils/stocklist.js';
 import { resolveTicker } from '../utils/ticker.js';
+import * as trendlyne from '../providers/trendlyne.js';
+import * as external from '../providers/external.js';
 
 function extractSymbolsFromStocklist(filePath: string): string[] {
   try {
@@ -161,6 +163,139 @@ export function startYahooPrefetchFromStocklist() {
   setInterval(runBatch, INTERVAL_MS);
 
   // Optional: Prefetch news using company names mapped from stocklist
+  // --- External provider data prefetch and DB storage ---
+  (function startExternalProviderScheduler() {
+    const ENABLE = String(process.env.PREFETCH_EXTERNAL_ENABLE || 'true').toLowerCase() === 'true';
+    if (!ENABLE) return;
+    const EXT_BATCH = Number(process.env.PREFETCH_EXTERNAL_BATCH || 25);
+    const EXT_INTERVAL_MS = Number(process.env.PREFETCH_EXTERNAL_INTERVAL_MS || 86_400_000); // 24 hours
+    let eidx = 0;
+    const runExternal = async () => {
+      try {
+        const end = Math.min(eidx + EXT_BATCH, tickers.length);
+        const slice = tickers.slice(eidx, end);
+        if (!slice.length) { eidx = 0; return; }
+        for (const ysym of slice) {
+          try {
+            // Moneycontrol price/volume
+            const mcid = mcMap.get(ysym);
+            if (mcid) {
+              const mcPvRaw = await external.mcPriceVolume(mcid).catch(()=>null);
+              const mcPv = mcPvRaw as { data?: Array<{ date?: string, open?: number, high?: number, low?: number, close?: number, volume?: number }> } | null;
+              if (mcPv && mcPv.data && Array.isArray(mcPv.data)) {
+                for (const row of mcPv.data) {
+                  if (row.date && row.close != null) {
+                    insertPriceRow({ symbol: ysym, date: row.date, open: row.open ?? row.close, high: row.high ?? row.close, low: row.low ?? row.close, close: row.close, volume: row.volume ?? 0 });
+                  }
+                }
+              }
+            }
+            // Moneycontrol stock history
+            if (mcid) {
+              const now = Math.floor(Date.now()/1000);
+              const from = now - 5*365*24*60*60; // 5 years
+              const mcHistRaw = await external.mcStockHistory(mcid, '1D', from, now).catch(()=>null);
+              const mcHist = mcHistRaw as { t?: number[], o?: number[], h?: number[], l?: number[], c?: number[], v?: number[] } | null;
+              if (mcHist && mcHist.c && Array.isArray(mcHist.c)) {
+                for (let i=0; i<mcHist.c.length; i++) {
+                  const date = mcHist.t && mcHist.t[i] ? new Date(mcHist.t[i]*1000).toISOString().slice(0,10) : null;
+                  if (date && mcHist.o && mcHist.h && mcHist.l && mcHist.c && mcHist.v &&
+                    mcHist.o[i]!=null && mcHist.h[i]!=null && mcHist.l[i]!=null && mcHist.c[i]!=null && mcHist.v[i]!=null) {
+                    insertPriceRow({ symbol: ysym, date, open: mcHist.o[i], high: mcHist.h[i], low: mcHist.l[i], close: mcHist.c[i], volume: mcHist.v[i] });
+                  }
+                }
+              }
+            }
+            // ET Markets indices (example)
+            const indices = await external.etGetAllIndices().catch(()=>null);
+            if (indices && Array.isArray(indices)) {
+              // Optionally store index data as news/docs for RAG
+              for (const idx of indices) {
+                if (idx.name && idx.last_price) {
+                  const id = `et:index:${idx.name}`;
+                  const date = new Date().toISOString();
+                  const title = `ET Index: ${idx.name}`;
+                  const summary = `Last price: ${idx.last_price}, Change: ${idx.change}, %Change: ${idx.percent_change}`;
+                  insertNewsRow({ id, symbol: ysym, date, title, summary, url: '', sentiment: 0 });
+                }
+              }
+            }
+            // Optionally index for RAG
+            try {
+              const enableRag = String(process.env.PREFETCH_RAG_INDEX_ENABLE || 'false').toLowerCase() === 'true';
+              if (enableRag) {
+                await indexNamespace(ysym, { texts: [{ text: `External data for ${ysym}`, metadata: { date: new Date().toISOString().slice(0,10), source: 'external', url: '' } }] });
+              }
+            } catch {}
+          } catch (e) {
+            logger.warn({ err: e, symbol: ysym }, 'external_prefetch_symbol_failed');
+          }
+          await sleep(Math.max(100, BASE_DELAY_MS));
+        }
+        eidx = end;
+      } catch (err) {
+        logger.warn({ err }, 'external_prefetch_failed');
+      }
+    };
+    runExternal().catch(()=>{});
+    setInterval(runExternal, EXT_INTERVAL_MS);
+  })();
+
+  // --- Trendlyne provider data prefetch and DB storage ---
+  (function startTrendlyneScheduler() {
+    const ENABLE = String(process.env.PREFETCH_TRENDLYNE_ENABLE || 'true').toLowerCase() === 'true';
+    if (!ENABLE) return;
+    const TL_BATCH = Number(process.env.PREFETCH_TRENDLYNE_BATCH || 25);
+    const TL_INTERVAL_MS = Number(process.env.PREFETCH_TRENDLYNE_INTERVAL_MS || 86_400_000); // 24 hours
+    let tidx = 0;
+    const runTrendlyne = async () => {
+      try {
+        const end = Math.min(tidx + TL_BATCH, tickers.length);
+        const slice = tickers.slice(tidx, end);
+        if (!slice.length) { tidx = 0; return; }
+        for (const ysym of slice) {
+          try {
+            // Fetch advanced technicals
+            const tlid = ysym; // Assuming ysym is usable as Trendlyne ID
+            const advTech = await trendlyne.tlAdvTechnical(tlid, 24).catch(()=>null);
+            if (advTech) {
+              const norm = trendlyne.normalizeAdvTechnical(advTech);
+              const id = `trendlyne:advtech:${ysym}`;
+              const date = new Date().toISOString();
+              const title = `Trendlyne Advanced Technicals`;
+              const summary = `Score: ${norm.score}, Signal: ${norm.signal}, Decision: ${norm.decision}`;
+              insertNewsRow({ id, symbol: ysym, date, title, summary, url: 'https://trendlyne.com/', sentiment: 0 });
+              // Optionally index for RAG
+              try {
+                const enableRag = String(process.env.PREFETCH_RAG_INDEX_ENABLE || 'false').toLowerCase() === 'true';
+                if (enableRag) {
+                  await indexNamespace(ysym, { texts: [{ text: summary, metadata: { date: date.slice(0,10), source: 'trendlyne', url: 'https://trendlyne.com/' } }] });
+                }
+              } catch {}
+            }
+            // Fetch SMA chart data
+            const smaChart = await trendlyne.tlSmaChart(tlid).catch(()=>null);
+            if (smaChart && smaChart.data && Array.isArray(smaChart.data)) {
+              for (const pt of smaChart.data) {
+                if (pt.t && pt.v) {
+                  const date = new Date(pt.t*1000).toISOString().slice(0,10);
+                  insertPriceRow({ symbol: ysym, date, open: pt.v, high: pt.v, low: pt.v, close: pt.v, volume: 0 });
+                }
+              }
+            }
+          } catch (e) {
+            logger.warn({ err: e, symbol: ysym }, 'trendlyne_prefetch_symbol_failed');
+          }
+          await sleep(Math.max(100, BASE_DELAY_MS));
+        }
+        tidx = end;
+      } catch (err) {
+        logger.warn({ err }, 'trendlyne_prefetch_failed');
+      }
+    };
+    runTrendlyne().catch(()=>{});
+    setInterval(runTrendlyne, TL_INTERVAL_MS);
+  })();
   if (String(process.env.PREFETCH_NEWS_ENABLE || 'true') === 'true') {
     const NA = process.env.NEWS_API_KEY;
     if (!NA) {
