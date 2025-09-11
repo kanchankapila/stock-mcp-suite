@@ -65,10 +65,15 @@ import { Api } from './app/services/api.service';
         + '<th style="text-align:left; padding:4px">Reco</th>'
         + '</tr>';
       const rows = arr.map((r:any, idx:number)=>{
-        const mom = (Number(r.momentum)*100).toFixed(1)+'%';
-        const sent = Number(r.sentiment).toFixed(2);
+        const momVal = Number(r.momentum);
+        const mom = (momVal*100).toFixed(1)+'%';
+        const momColor = momVal>=0 ? 'var(--success)' : 'var(--danger)';
+        const sentVal = Number(r.sentiment);
+        const sent = sentVal.toFixed(2);
+        const sentColor = sentVal>=0 ? 'var(--success)' : 'var(--danger)';
         const mcs = (r.mcScore===null||r.mcScore===undefined) ? '-' : String(Number(r.mcScore).toFixed(0));
         const rec = String(r.recommendation || 'HOLD');
+        const recColor = rec.toUpperCase()==='BUY' ? 'var(--success)' : rec.toUpperCase()==='SELL' ? 'var(--danger)' : 'var(--muted)';
         const currentRank = idx + 1;
         const prev = prevRanks.get(String(r.symbol).toUpperCase());
         const delta = (prev !== undefined) ? (prev - currentRank) : null; // + means improved
@@ -87,11 +92,11 @@ import { Api } from './app/services/api.service';
         return '<tr>'
           + `<td style=\"padding:4px\">${symLabel}</td>`
           + `<td style=\"padding:4px; text-align:right\">${Number(r.score).toFixed(3)}</td>`
-          + `<td style=\"padding:4px; text-align:right\">${mom}</td>`
-          + `<td style=\"padding:4px; text-align:right\">${sent}</td>`
+          + `<td style=\"padding:4px; text-align:right; color:${momColor}\">${mom}</td>`
+          + `<td style=\"padding:4px; text-align:right; color:${sentColor}\">${sent}</td>`
           + `<td style=\"padding:4px; text-align:right\">${mcs}</td>`
           + (showContrib ? `<td style=\"padding:4px\">${contribHtml}</td>` : '')
-          + `<td style=\"padding:4px\">${rec}</td>`
+          + `<td style=\"padding:4px; font-weight:bold; color:${recColor}\">${rec}</td>`
           + '</tr>';
       }).join('');
       if (body) body.innerHTML = `<table style=\"width:100%; border-collapse:collapse\">${head}${rows}</table>`;
