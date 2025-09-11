@@ -41,6 +41,10 @@ CREATE TABLE IF NOT EXISTS news(
 
 -- Helpful indices for query patterns
 CREATE INDEX IF NOT EXISTS news_symbol_date ON news(symbol, date);
+CREATE INDEX IF NOT EXISTS prices_date_idx ON prices(date);
+CREATE INDEX IF NOT EXISTS docs_symbol_idx ON docs(symbol);
+CREATE INDEX IF NOT EXISTS analyses_symbol_idx ON analyses(symbol);
+CREATE INDEX IF NOT EXISTS options_metrics_symbol_idx ON options_metrics(symbol);
 
 -- Moneycontrol Technicals cache
 CREATE TABLE IF NOT EXISTS mc_tech(

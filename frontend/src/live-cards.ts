@@ -9,6 +9,7 @@ let currentSymbol = '';
 let sparkChart: Chart | null = null;
 const sparkPoints: Array<{ t: number; v: number }> = [];
 let latestBidAsk: { bid?: number|null; ask?: number|null } = {};
+let lastPrice: number | null = null;
 // Compact delivery gauge + PV cache across HMR
 let miniGauge: Chart | null = null;
 let mcPvCache: Map<string, any>;
@@ -130,10 +131,14 @@ function updateLiveQuoteCard(symbol: string, price: number, isoTime?: string) {
   const timeTxt = isoTime ? new Date(isoTime).toLocaleTimeString() : '';
   const bidTxt = (latestBidAsk.bid!=null && Number.isFinite(Number(latestBidAsk.bid))) ? Number(latestBidAsk.bid).toFixed(2) : 'N/A';
   const askTxt = (latestBidAsk.ask!=null && Number.isFinite(Number(latestBidAsk.ask))) ? Number(latestBidAsk.ask).toFixed(2) : 'N/A';
+  const change = lastPrice != null && Number.isFinite(price) ? price - lastPrice : 0;
+  const arrow = change > 0 ? '▲' : change < 0 ? '▼' : '';
+  const changeColor = change > 0 ? (getCss('--success') || '#16a34a') : change < 0 ? (getCss('--danger') || '#ef4444') : (getCss('--muted') || '#6b7280');
+  const changeTxt = lastPrice != null && Number.isFinite(change) ? `${arrow} ${Math.abs(change).toFixed(2)}` : '';
   body.innerHTML = `
     <div class="grid-2" style="gap:8px; font-size:12px">
       <div><div class="muted">Symbol</div><div>${escapeHtml(symbol)}</div></div>
-      <div><div class="muted">Price</div><div class="stat-sm">${priceTxt}</div></div>
+      <div><div class="muted">Price</div><div class="stat-sm" style="color:${changeColor}">${priceTxt}${changeTxt?` ${changeTxt}`:''}</div></div>
     </div>
     <div class="grid-2" style="gap:8px; font-size:12px; margin-top:6px">
       <div><div class="muted">Bid</div><div>${bidTxt}</div></div>
@@ -148,6 +153,7 @@ function updateLiveQuoteCard(symbol: string, price: number, isoTime?: string) {
   const labels = sparkPoints.map(p=> new Date(p.t).toLocaleTimeString());
   const values = sparkPoints.map(p=> p.v);
   renderSparkline('liveQuoteBody', labels, values);
+  if (Number.isFinite(price)) lastPrice = price;
 }
 
 function getYahooControls() {
