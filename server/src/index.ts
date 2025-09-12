@@ -11,6 +11,7 @@ import { attachLive } from './ws/live.js';
 import { logger } from './utils/logger.js';
 import { startYahooPrefetchFromStocklist } from './providers/prefetch.js';
 import { startRagAutoTasks } from './rag/auto.js';
+import { metricsWithMeta } from './utils/metrics.js';
 
 const app = express();
 app.use(cors());
@@ -38,6 +39,10 @@ app.get('/health/rag', async (_req, res) => {
   } catch (err:any) {
     res.status(500).json({ ok:false, error: String(err?.message || err) });
   }
+});
+
+app.get('/api/metrics', (_req, res) => {
+  res.json({ ok: true, data: metricsWithMeta() });
 });
 
 app.use('/api', stockRoutes);

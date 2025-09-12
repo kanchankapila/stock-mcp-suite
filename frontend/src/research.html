@@ -1,0 +1,158 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Stock Research</title>
+    <link rel="stylesheet" href="/styles/tokens.css" />
+    <link rel="stylesheet" href="/styles/layout.css" />
+    <style>
+      body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif; background: var(--bg, #f7f8fb); }
+      header { padding:14px 22px; background:#fff; border-bottom:1px solid var(--border,#e5e7eb); display:flex; gap:18px; flex-wrap:wrap; align-items:center; }
+      header a { text-decoration:none; color: var(--brand,#2563eb); font-weight:600; }
+      main { max-width:1500px; margin:0 auto; padding:24px; }
+      h2 { margin:4px 0 12px; font-size:15px; letter-spacing:.05em; text-transform:uppercase; color:var(--muted,#64748b); }
+      .grid { display:grid; gap:18px; }
+      .grid.cols-3 { grid-template-columns: repeat(auto-fit,minmax(320px,1fr)); }
+      .grid.cols-2 { grid-template-columns: repeat(auto-fit,minmax(480px,1fr)); }
+      .card { background:#fff; border:1px solid var(--border,#e5e7eb); border-radius:16px; padding:16px 18px; box-shadow:0 4px 14px rgba(0,0,0,0.05); position:relative; overflow:hidden; }
+      .card h3 { margin:0 0 10px; font-size:16px; font-weight:600; }
+      .muted { color: var(--muted,#6b7280); font-size:12px; }
+      label { font-size:12px; font-weight:500; color:#334155; display:flex; flex-direction:column; gap:4px; position:relative; }
+      input, select, textarea, button { font:inherit; padding:8px 10px; border-radius:10px; border:1px solid var(--border,#d1d5db); background: var(--panel-2,#fbfcff); }
+      button { cursor:pointer; background:linear-gradient(180deg,#fff,#f1f5f9); font-weight:500; }
+      button:hover { border-color: var(--brand,#3b82f6); box-shadow:0 0 0 2px rgba(59,130,246,0.15) inset; }
+      .row { display:flex; gap:14px; flex-wrap:wrap; align-items:flex-end; }
+      table { width:100%; border-collapse:collapse; }
+      th, td { padding:4px 6px; text-align:left; border-bottom:1px solid #eef2f6; font-size:12px; }
+      canvas { width:100%; height:240px; background:linear-gradient(180deg,#ffffff,#f5f7fa); border:1px solid var(--border,#e2e8f0); border-radius:12px; }
+      .pill { padding:4px 10px; border-radius:999px; background:#f1f5f9; font-size:11px; font-weight:500; }
+      .pill.buy { background:#dcfce7; color:#166534; }
+      .pill.sell { background:#fee2e2; color:#991b1b; }
+      .flex { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+      .list { display:flex; flex-direction:column; gap:10px; max-height:260px; overflow:auto; }
+      .news-item { border:1px solid var(--border,#e5e7eb); padding:8px 10px; border-radius:10px; background:#fff; display:flex; flex-direction:column; gap:4px; }
+      .news-item .title { font-size:13px; font-weight:500; line-height:1.25; }
+      .badge { background:linear-gradient(135deg,var(--brand,#3b82f6),var(--brand-2,#8b5cf6)); color:#fff; padding:6px 12px; border-radius:999px; font-size:12px; font-weight:600; }
+      .section-actions { position:absolute; top:10px; right:12px; display:flex; gap:6px; }
+      .code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; white-space:pre-wrap; background:#0f172a; color:#e2e8f0; padding:10px 12px; border-radius:12px; max-height:260px; overflow:auto; }
+      .watchlist { display:flex; gap:6px; flex-wrap:wrap; }
+      .watchlist button.sym { background:#fff; border:1px solid var(--border,#e5e7eb); padding:6px 10px; border-radius:8px; font-size:12px; }
+      .watchlist button.sym.active { background: var(--brand,#3b82f6); color:#fff; border-color: var(--brand,#3b82f6); }
+      .spinner { width:14px; height:14px; border:3px solid #dbe3f1; border-top-color:#3b82f6; border-radius:50%; animation:spin .8s linear infinite; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      .status-dot { width:10px; height:10px; border-radius:50%; background:#94a3b8; }
+      .status-dot.ok { background:#16a34a; }
+      .status-dot.err { background:#dc2626; }
+      .compare-table td, .compare-table th { font-size:11px; }
+      .inline { display:inline-flex; align-items:center; gap:4px; }
+      .hint { font-size:11px; color:#64748b; }
+      .ai-stream { min-height:140px; }
+      .danger-text { color:#dc2626; }
+      .success-text { color:#15803d; }
+      .neutral-text { color:#334155; }
+      /* Autocomplete suggestions */
+      .suggestions { position:absolute; top:100%; left:0; right:0; background:#fff; border:1px solid var(--border,#e5e7eb); border-radius:10px; margin-top:4px; max-height:260px; overflow:auto; z-index:50; box-shadow:0 6px 18px rgba(0,0,0,0.08); }
+      .suggestions.hidden { display:none; }
+      .suggestions .item { padding:6px 10px; font-size:12px; cursor:pointer; display:flex; flex-direction:column; }
+      .suggestions .item:hover { background:#f1f5f9; }
+      .suggestions .sym { font-weight:600; color:#0f172a; }
+      .suggestions .name { color:#64748b; font-size:11px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="badge">AI Stock Research</div>
+      <a href="/index.html">Dashboard</a>
+      <span class="muted">Comprehensive research & analysis workspace</span>
+    </header>
+    <main id="root">
+      <section class="card" id="symbolPicker">
+        <h3>Symbol & Watchlist</h3>
+        <div class="row">
+          <label style="flex:1; min-width:160px;">Symbol
+            <input id="symInput" placeholder="AAPL / RELIANCE.NS" autocomplete="off" />
+            <div id="symSuggest" class="suggestions hidden"></div>
+          </label>
+          <button id="loadBtn">Load</button>
+          <button id="addWatchBtn" class="btn-sm" style="margin-left:auto;">Add to Watchlist</button>
+          <div id="status" class="inline"><div class="status-dot" id="healthDot"></div><span class="hint" id="healthText">health…</span></div>
+        </div>
+        <div class="watchlist" id="watchlist"></div>
+      </section>
+
+      <div class="grid cols-3" style="margin-top:18px;">
+        <section class="card" id="overviewCard">
+          <h3>Overview</h3>
+          <div id="overviewBody" class="muted">Enter a symbol and click Load.</div>
+        </section>
+        <section class="card" id="analysisCard">
+          <h3>AI Score & Backtest</h3>
+          <div id="analysisBody" class="muted">-</div>
+          <div class="section-actions"><button id="runAnalyze" class="btn-sm">Analyze</button></div>
+        </section>
+        <section class="card" id="optionsCard">
+          <h3>Options Metrics</h3>
+          <div class="section-actions"><select id="optDays"><option value="30">30d</option><option value="60" selected>60d</option><option value="120">120d</option></select></div>
+          <div id="optionsBody" class="muted">-</div>
+        </section>
+      </div>
+
+      <div class="grid cols-2" style="margin-top:18px;">
+        <section class="card" id="chartCard">
+          <h3>Price & SMA</h3>
+          <div class="section-actions"><select id="smaFast"><option>10</option><option selected>20</option><option>30</option></select><select id="smaSlow"><option>50</option><option selected>100</option><option>150</option></select></div>
+          <canvas id="priceChart" height="260"></canvas>
+          <div class="hint" id="chartHint"></div>
+        </section>
+        <section class="card" id="newsCard">
+          <h3>Recent News & Sentiment</h3>
+            <div id="newsBody" class="list"></div>
+        </section>
+      </div>
+
+      <div class="grid cols-2" style="margin-top:18px;">
+        <section class="card" id="agentCard">
+          <h3>AI Agent Q&A</h3>
+          <div class="row" style="align-items:center;">
+            <input id="agentQ" placeholder="e.g. Summarize growth drivers" style="flex:1;" />
+            <button id="askBtn">Ask</button>
+            <button id="askStreamBtn" class="btn-sm">Stream</button>
+          </div>
+          <div id="agentOut" class="code ai-stream">Ask a question about the active symbol.</div>
+        </section>
+        <section class="card" id="ragCard">
+          <h3>RAG Search (Namespace = symbol)</h3>
+          <div class="row">
+            <input id="ragQ" placeholder="What is management saying about margins?" style="flex:1" />
+            <button id="ragBtn">Query</button>
+          </div>
+          <div id="ragOut" class="code">-</div>
+        </section>
+      </div>
+
+      <div class="grid cols-2" style="margin-top:18px;">
+        <section class="card" id="compareCard">
+          <h3>Multi-Symbol Compare</h3>
+          <div class="row" style="align-items:center;">
+            <input id="compareInput" placeholder="Add symbol" />
+            <button id="compareAdd">Add</button>
+            <button id="compareRun" class="btn-sm">Run</button>
+          </div>
+          <div class="hint">Compares total return over last 90 days based on price history locally.</div>
+          <div id="compareTableWrap" style="margin-top:8px;"></div>
+        </section>
+        <section class="card" id="rawCard">
+          <h3>Raw JSON (Overview)</h3>
+          <div id="rawJson" class="code">-</div>
+        </section>
+      </div>
+
+      <section class="card" style="margin-top:18px;">
+        <h3>Disclaimers</h3>
+        <div class="muted" style="font-size:11px; line-height:1.4;">Educational demo. Not investment advice. Data & scores may be incomplete, delayed or noisy. Always verify with official filings.</div>
+      </section>
+    </main>
+    <script type="module" src="/research.ts"></script>
+  </body>
+</html>

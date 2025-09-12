@@ -1,0 +1,98 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>External Market Data</title>
+    <link rel="stylesheet" href="/styles/tokens.css" />
+    <link rel="stylesheet" href="/styles/layout.css" />
+    <style>
+      body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif; background: var(--bg,#f7f8fb); }
+      header { padding:14px 22px; background:#fff; border-bottom:1px solid var(--border,#e5e7eb); display:flex; gap:20px; flex-wrap:wrap; align-items:center; }
+      a { text-decoration:none; color: var(--brand,#2563eb); font-weight:600; }
+      main { max-width:1600px; margin:0 auto; padding:24px; }
+      .grid { display:grid; gap:18px; }
+      .g2 { grid-template-columns: repeat(auto-fit,minmax(380px,1fr)); }
+      .g3 { grid-template-columns: repeat(auto-fit,minmax(300px,1fr)); }
+      .card { background:#fff; border:1px solid var(--border,#e2e8f0); border-radius:16px; padding:16px 18px; box-shadow:0 4px 14px rgba(0,0,0,0.05); position:relative; }
+      h3 { margin:0 0 10px; font-size:16px; font-weight:600; }
+      .muted { color: var(--muted,#64748b); font-size:12px; }
+      select, input, button { padding:8px 10px; border-radius:10px; border:1px solid var(--border,#d1d5db); background: var(--panel-2,#fbfcff); font:inherit; }
+      button { cursor:pointer; background:linear-gradient(180deg,#fff,#f1f5f9); }
+      button:hover { border-color: var(--brand,#2563eb); box-shadow:0 0 0 2px rgba(37,99,235,.15) inset; }
+      table { width:100%; border-collapse:collapse; }
+      th, td { padding:4px 6px; border-bottom:1px solid #eef2f6; text-align:left; font-size:12px; }
+      .flex { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+      .code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; background:#0f172a; color:#e2e8f0; padding:10px 12px; border-radius:12px; max-height:260px; overflow:auto; white-space:pre-wrap; }
+      .badge { background:linear-gradient(135deg,var(--brand,#3b82f6),var(--brand-2,#8b5cf6)); color:#fff; padding:6px 12px; border-radius:999px; font-size:12px; font-weight:600; }
+      .pill { padding:4px 8px; font-size:11px; border-radius:8px; background:#f1f5f9; }
+      .good { color:#15803d; }
+      .bad { color:#b91c1c; }
+      .section-actions { position:absolute; top:10px; right:12px; display:flex; gap:6px; }
+      .spinner { width:14px; height:14px; border:3px solid #dbe3f1; border-top-color:#3b82f6; border-radius:50%; animation:spin .8s linear infinite; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="badge">External Data</div>
+      <a href="/index.html">Dashboard</a>
+      <a href="/research.html">Research</a>
+      <nav style="display:flex; gap:12px; align-items:center;">
+        <a href="/research.html" style="padding:6px 12px; border-radius:8px; background:#eef2ff;">Research</a>
+        <a href="/external.html" style="padding:6px 12px; border-radius:8px; background:#3b82f6; color:#fff;">External</a>
+      </nav>
+      <span class="muted">Aggregated provider & market feeds</span>
+    </header>
+    <main>
+      <section class="card" id="symbolSelectCard">
+        <h3>Symbol Selection</h3>
+        <div class="flex">
+          <select id="symbolSelect" style="min-width:160px"></select>
+          <button id="refreshSymbol">Refresh Symbol Data</button>
+          <span class="muted" id="symbolHint"></span>
+          <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+            <label style="font-size:11px; display:flex; gap:4px; align-items:center;">Auto
+              <input id="autoToggle" type="checkbox" style="margin:0;" />
+            </label>
+            <select id="autoInterval" style="font-size:11px; padding:4px 6px;">
+              <option value="30000">30s</option>
+              <option value="60000" selected>60s</option>
+              <option value="120000">2m</option>
+              <option value="300000">5m</option>
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <h3 style="margin:28px 0 6px; font-size:13px; text-transform:uppercase; letter-spacing:.08em; color:#475569;">Market Overview</h3>
+      <div class="grid g3">
+        <section class="card" id="indicesCard"><h3>Indices</h3><div class="section-actions" style="top:8px;"><button data-act="exp-json" data-target="indices">JSON</button><button data-act="exp-csv" data-target="indices">CSV</button></div><div style="margin-bottom:6px; display:flex; gap:6px; align-items:center; flex-wrap:wrap;"><input id="idxFilter" placeholder="Filter" style="flex:1; min-width:120px; font-size:11px; padding:4px 6px;"/><select id="idxPageSize" style="font-size:11px; padding:4px 6px;"><option>10</option><option selected>15</option><option>25</option></select><button id="idxPrev" class="btn-sm" style="font-size:11px;">Prev</button><button id="idxNext" class="btn-sm" style="font-size:11px;">Next</button><span class="muted" id="indicesStatus" style="font-size:10px;"></span></div><div id="indicesBody" class="muted">Loading...</div></section>
+        <section class="card" id="sectorCard"><h3>Sectors</h3><div class="section-actions" style="top:8px;"><button data-act="exp-json" data-target="sectors">JSON</button><button data-act="exp-csv" data-target="sectors">CSV</button></div><div style="margin-bottom:6px; display:flex; gap:6px; align-items:center; flex-wrap:wrap;"><input id="secFilter" placeholder="Filter" style="flex:1; min-width:120px; font-size:11px; padding:4px 6px;"/><select id="secPageSize" style="font-size:11px; padding:4px 6px;"><option>10</option><option selected>15</option><option>25</option></select><button id="secPrev" class="btn-sm" style="font-size:11px;">Prev</button><button id="secNext" class="btn-sm" style="font-size:11px;">Next</button><span class="muted" id="sectorsStatus" style="font-size:10px;"></span></div><div id="sectorBody" class="muted">Loading...</div></section>
+        <section class="card" id="mmiCard"><h3>Market Mood (MMI)</h3><div class="section-actions"><button data-act="exp-json" data-target="mmi">JSON</button></div><div id="mmiBody" class="muted">Loading...</div><div class="muted" id="mmiStatus" style="font-size:10px; margin-top:4px;"></div></section>
+        <section class="card" id="valuationCard"><h3>Valuation Meter</h3><div class="section-actions"><button data-act="exp-json" data-target="valuation">JSON</button></div><div id="valuationBody" class="muted">Loading...</div><div class="muted" id="valuationStatus" style="font-size:10px; margin-top:4px;"></div></section>
+        <section class="card" id="tlCookieCard"><h3>Trendlyne Cookie</h3><div class="section-actions"><button data-act="exp-json" data-target="tlcookie">JSON</button></div><div id="tlCookieBody" class="muted">Loading...</div><div class="muted" id="tlCookieStatus" style="font-size:10px; margin-top:4px;"></div></section>
+        <section class="card" id="idxConCard"><h3>Index Constituents</h3><div class="section-actions"><button data-act="exp-json" data-target="idxCon">JSON</button><button data-act="exp-csv" data-target="idxCon">CSV</button></div><div class="muted" id="idxConBody">Click an index row.</div><div class="muted" id="idxConStatus" style="font-size:10px; margin-top:4px;"></div></section>
+      </div>
+
+      <h3 style="margin:32px 0 6px; font-size:13px; text-transform:uppercase; letter-spacing:.08em; color:#475569;">Stock Specific External Data</h3>
+      <div class="grid g2" id="stockCards">
+        <section class="card" id="mcQuickCard"><h3>Moneycontrol Quick</h3><div class="section-actions"><button data-act="mcQuick">Reload</button></div><div id="mcQuickBody" class="muted">Select symbol.</div></section>
+        <section class="card" id="mcPvCard"><h3>MC Price & Volume</h3><div class="section-actions"><button data-act="mcPV">Reload</button></div><div id="mcPvBody" class="muted">Select symbol.</div></section>
+        <section class="card" id="mcTechCard"><h3>MC Technical (Score)</h3><div class="section-actions"><select id="mcTechFreq"><option>D</option><option>W</option><option>M</option></select><button data-act="mcTech">Go</button></div><div id="mcTechBody" class="muted">Select symbol.</div></section>
+        <section class="card" id="tlAdvCard"><h3>Trendlyne Adv Tech</h3><div class="section-actions"><select id="tlLook"><option value="12">12</option><option value="24" selected>24</option><option value="48">48</option></select><button data-act="tlAdv">Go</button></div><div id="tlAdvBody" class="muted">Select symbol.</div></section>
+        <section class="card" id="tlSmaCard"><h3>Trendlyne SMA Chart</h3><div class="section-actions"><button data-act="tlSma">Reload</button></div><div id="tlSmaBody" class="muted">Select symbol.</div></section>
+        <section class="card" id="tlDerivCard"><h3>Trendlyne Derivatives</h3><div class="section-actions"><input id="tlDerivDate" type="date" style="font-size:11px; padding:4px 6px"/><button data-act="tlDeriv">Go</button></div><div id="tlDerivBody" class="muted">Pick date & symbol.</div></section>
+        <section class="card" id="dbStatsCard"><h3>DB Stats (Local)</h3><div class="section-actions"><button data-act="dbStats">Reload</button></div><div id="dbStatsBody" class="muted">Select symbol.</div></section>
+        <section class="card" id="optionsMetricsCard"><h3>Options Metrics</h3><div class="section-actions"><select id="optDaysSel" style="font-size:11px; padding:4px 6px;"><option>30</option><option selected>60</option><option>120</option></select><button data-act="reload-options">Go</button><button data-act="exp-json" data-target="optionsMetrics">JSON</button><button data-act="exp-csv" data-target="optionsMetrics">CSV</button></div><div id="optionsMetricsBody" class="muted">Select symbol.</div><div class="muted" id="optionsMetricsStatus" style="font-size:10px; margin-top:4px;"></div></section>
+        <section class="card" id="sentHeatCard"><h3>Sentiment Heatmap</h3><div class="section-actions"><button data-act="reload-heat">Reload</button><button data-act="exp-json" data-target="sentHeat">JSON</button></div><div id="sentHeatBody" class="muted">Select symbol.</div><div class="muted" id="sentHeatStatus" style="font-size:10px; margin-top:4px;"></div></section>
+      </div>
+
+      <section class="card" style="margin-top:34px;">
+        <h3>Raw JSON (last loaded stock resource)</h3>
+        <div id="rawOut" class="code">-</div>
+      </section>
+    </main>
+    <script type="module" src="/external.ts"></script>
+  </body>
+</html>

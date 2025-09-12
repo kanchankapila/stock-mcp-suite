@@ -13,7 +13,8 @@
     "db:check": "node --loader ts-node/esm scripts/db-check.ts",
     "db:assert": "node --loader ts-node/esm scripts/db-assert.ts",
     "db:rebuild": "node --loader ts-node/esm scripts/rebuild.ts",
-    "alpha:fetch": "node --loader ts-node/esm scripts/alpha-fetch.ts AAPL"
+    "alpha:fetch": "node --loader ts-node/esm scripts/alpha-fetch.ts AAPL",
+    "test:yahoo-fallback": "tsx scripts/yahoo-fallback-test.ts"
   },
   "dependencies": {
     "@huggingface/inference": "^4.7.1",
@@ -30,13 +31,16 @@
     "node-fetch": "^3.3.2",
     "puppeteer": "^24.18.0",
     "sentiment": "^5.0.2",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "yahoo-finance2": "^2.12.4",
+    "fuse.js": "^7.0.0"
   },
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^10.9.1",
     "@types/express": "^4.17.21",
     "ts-node": "^10.9.2",
     "tsx": "^4.7.0",
-    "typescript": "^5.6.2"
+    "typescript": "^5.6.2",
+    "@types/fuse.js": "^6.4.3"
   }
 }

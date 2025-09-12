@@ -134,6 +134,41 @@ Introspect the provider mappings and resolve a given input (symbol/name/isin/mcs
     }
     ```
 
+### External Data Endpoints
+
+The server provides several endpoints to fetch data from external sources on-demand.
+
+#### Yahoo Finance (`yahoo_fin`)
+
+For comprehensive data from Yahoo Finance, the server uses the Python `yahoo_fin` library via the `server/scripts/yahoo_fin_fetch.py` script. This provides a rich dataset including real-time price, financials, options, and more.
+
+**Dependencies**
+
+To use this feature, you need Python 3 and the required packages installed:
+```bash
+pip install -r server/scripts/requirements.txt
+```
+The `requirements.txt` file includes `yahoo_fin` and `requests_html`.
+
+**Endpoint**
+
+`GET /api/external/yahoo-fin/:symbol`
+
+This endpoint executes the Python script for the given symbol and returns a large JSON object containing:
+- `live_price`: Real-time stock price.
+- `quote_table`: Detailed quote data.
+- `info`: Company profile information.
+- `stats` and `stats_valuation`: Key statistics and valuation metrics.
+- `holders`: Major and institutional holders.
+- Financials: `income_statement`, `balance_sheet`, `cash_flow`.
+- `earnings_history`: Historical earnings data.
+- `analysts_info`: Analyst recommendations.
+- `history`: Historical OHLCV data (defaults to 1 year daily).
+- `news`: Recent news from Yahoo Finance.
+- `options`: Options chain for the nearest expiration date.
+
+Query parameters `period` (e.g., `1y`, `5d`) and `interval` (e.g., `1d`, `1h`) can be passed to customize the historical data retrieval.
+
 ### RAG (LangChain)
 
 The server exposes a minimal LangChain-powered RAG to index external web pages and query them per-namespace (e.g., a stock symbol).
@@ -163,6 +198,17 @@ Notes:
 - Persistence:
   - `RAG_STORE=hnsw`: per-namespace HNSW index stored under `RAG_DIR/<ns>`.
   - `RAG_STORE=sqlite`: embeddings stored in `rag_embeddings` SQLite table; retrieval computes cosine in-process.
+
+### RAG Batch Indexing
+The `server/scripts/rag-build-batch.ts` script pre-indexes local source files for all symbols defined in `stocklist.ts`.
+
+1.  **Prepare Sources**: Place text files with source content under `server/sample-data/sources/<SYMBOL>/` for each symbol you want to index. For example: `server/sample-data/sources/AAPL/report-2023.txt`.
+2.  **Run Script**:
+    ```bash
+    cd server
+    npx ts-node scripts/rag-build-batch.ts
+    ```
+The script iterates through all symbols, finds their corresponding source files, and adds them to the RAG index. This is useful for populating the RAG store from local files in bulk.
 
 ### Live Prefetch and WebSocket
 The server runs a background prefetcher that batches Yahoo quote requests and writes to the DB. It adapts with backoff and falls back to Yahoo chart and then Stooq if needed. WebSocket polling for active subscriptions uses the same batching/backoff. Tunables (commented in `server/.env`):
@@ -217,6 +263,15 @@ RAG / LLM (optional)
 - OpenAI: `OPENAI_API_KEY`, `OPENAI_MODEL` (default `gpt-4o-mini`), `OPENAI_EMBEDDING_MODEL` (default `text-embedding-3-small`).
 - Hugging Face: `HUGGINGFACEHUB_API_KEY`, `HF_EMBEDDING_MODEL` (default `sentence-transformers/all-MiniLM-L6-v2`).
 
+Scripts & Testing
+- `WS_URL`: The URL for the WebSocket server for the smoke test (default `ws://localhost:4010/ws`).
+- `WS_SYMBOLS`: Comma-separated list of stock symbols for the WebSocket smoke test (default `BEL,BE03,INFY`).
+- `WS_TIMEOUT_MS`: Timeout for the WebSocket smoke test in milliseconds (default `20000`).
+- `SYMBOL`: A default stock symbol for scripts like `db-assert.ts`.
+
+News behavior
+- `NEWS_FALLBACK_TO_SAMPLE_ON_429`: when NewsAPI returns HTTP 429 (rate limit), ingest will, if true (default), use sample data to continue analysis. If false, it skips news instead of failing.
+
 Example `.env`
 ```
 PORT=4010
@@ -268,10 +323,17 @@ OPENAI_MODEL=gpt-4o-mini
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 # HUGGINGFACEHUB_API_KEY=...
 HF_EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
- 
-News behavior
-- `NEWS_FALLBACK_TO_SAMPLE_ON_429`: when NewsAPI returns HTTP 429 (rate limit), ingest will, if true (default), use sample data to continue analysis. If false, it skips news instead of failing.
+
+# Scripts & Testing
+# SYMBOL=AAPL
+# WS_URL=ws://localhost:4010/ws
+# WS_SYMBOLS=BEL,BE03,INFY
+# WS_TIMEOUT_MS=20000
+
+# News behavior
+NEWS_FALLBACK_TO_SAMPLE_ON_429=true
 ```
+
 - `LIVE_*`: polling cadence, batch size, fallbacks.
 - `INGEST_USE_STOOQ_FALLBACK`: enable Stooq fallback during ingest.
 

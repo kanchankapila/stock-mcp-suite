@@ -83,7 +83,8 @@ export class Api {
   }
 
   async mcTech(symbol: string, freq: 'D'|'W'|'M'='D') {
-    const url = new URL(`${this.base}/api/stocks/${symbol}/mc-tech`, window.location.origin);
+    const url = new URL(`${this.base}/api/external/mc/tech`, window.location.origin);
+    url.searchParams.set('symbol', symbol);
     url.searchParams.set('freq', freq);
     const res = await fetch(url.toString());
     if (!res.ok) throw new Error(await res.text());

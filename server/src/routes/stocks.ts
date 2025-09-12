@@ -3,7 +3,7 @@ import db, { upsertStock, insertPriceRow, insertNewsRow, listPrices, listNews, s
 import { fetchDailyTimeSeries, parseAlphaDaily } from '../providers/alphaVantage.js';
 import { fetchNews, parseNews } from '../providers/news.js';
 import { fetchMcInsights, fetchMcTech } from '../providers/moneycontrol.js';
-import { fetchYahooDaily, parseYahooDaily, fetchYahooQuoteSummary, fetchYahooQuote } from '../providers/yahoo.js';
+import { fetchYahooDaily, parseYahooDaily, fetchYahooQuoteSummary, fetchYahooQuote, YahooInterval } from '../providers/yahoo.js';
 import { fetchYahooFin } from '../providers/yahooFin.js';
 import { fetchStooqDaily } from '../providers/stooq.js';
 import { sentimentScore } from '../analytics/sentiment.js';
@@ -18,6 +18,7 @@ import { logger } from '../utils/logger.js';
 import { loadStocklist } from '../utils/stocklist.js';
 import { resolveTicker, findStockEntry, listTickerProvidersFromEnv, getProviderResolutionConfig } from '../utils/ticker.js';
 import { spawn } from 'child_process';
+import { searchStocks, stockIndexStats } from '../utils/stockIndex.js';
 
 export const router = Router();
 
@@ -242,6 +243,20 @@ router.post('/ingest/:symbol', asyncHandler(async (req, res) => {
     const status = Number(err?.status || 500);
     return res.status(status === 500 ? 400 : status).json({ ok:false, error: msg });
   }
+}));
+
+// Fuzzy search over stocklist (symbol, name, mcsymbol, isin, tlid)
+router.get('/stocks/search', asyncHandler((req, res) => {
+  const q = String((req.query.q || req.query.query || '')).trim();
+  const limit = req.query.limit ? Number(req.query.limit) : 15;
+  if (!q) return res.json({ ok: true, data: [] });
+  const data = searchStocks(q, limit);
+  res.json({ ok: true, data, meta: { query: q, limit } });
+}));
+
+// Diagnostics for the in-memory stock index
+router.get('/stocks/search/stats', asyncHandler((_req, res) => {
+  res.json({ ok: true, data: stockIndexStats() });
 }));
 
 router.get('/stocks/:symbol/overview', asyncHandler(async (req, res) => {
@@ -513,51 +528,6 @@ router.get('/stocks/list', asyncHandler((_req, res) => {
   res.json({ ok: true, data });
 }));
 
-// Compute Top Picks across symbols using sentiment, momentum, and MC tech
-router.get('/top-picks', asyncHandler(async (req, res) => {
-  const days = req.query.days ? Number(req.query.days) : 60;
-  const limit = req.query.limit ? Number(req.query.limit) : 10;
-  const lookback = Math.max(5, Number.isFinite(days) ? days : 60);
-  const cutoff = new Date(Date.now() - lookback*24*60*60*1000).toISOString();
-
-  const rows = db.prepare(`SELECT DISTINCT symbol FROM prices WHERE date>=? ORDER BY symbol`).all(cutoff) as Array<{symbol:string}>;
-  const symbols = rows.map(r => String(r.symbol || '').toUpperCase());
-  if (!symbols.length) return res.json({ ok:true, data: [] });
-
-  function safeNumber(v: any, def=0) { const n = Number(v); return Number.isFinite(n) ? n : def; }
-
-  const results: Array<any> = [];
-  for (const s of symbols) {
-    try {
-      const pr = db.prepare(`SELECT date, close FROM prices WHERE symbol=? AND date>=? ORDER BY date ASC`).all(s, cutoff) as Array<{date:string, close:number}>;
-      if (!pr.length) continue;
-      const mom = pr.length > 1 ? (safeNumber(pr[pr.length-1].close) - safeNumber(pr[0].close)) / Math.max(1e-9, safeNumber(pr[0].close)) : 0;
-
-      const nsr = db.prepare(`SELECT AVG(sentiment) as avg FROM news WHERE symbol=? AND date>=?`).get(s, cutoff) as {avg:number}|undefined;
-      const sent = safeNumber(nsr?.avg, 0);
-
-      const techD = getMcTech(s, 'D') as any;
-      let rsi = NaN, piv = NaN, mcs = NaN;
-      try { rsi = safeNumber(techD?.oscillators?.find?.((o:any)=> /rsi/i.test(o?.name||''))?.value, NaN); } catch {}
-      try { const pv = techD?.pivot_level?.pivot ?? techD?.pivots?.pivot ?? techD?.pivot ?? null; piv = safeNumber(pv, NaN); } catch {}
-      try { mcs = safeNumber(techD?.score ?? techD?.stockScore, NaN); } catch {}
-
-      const momN = Math.max(-1, Math.min(1, mom));
-      const sentN = Math.max(-1, Math.min(1, sent));
-      const scoreN = Number.isFinite(mcs) ? Math.max(-1, Math.min(1, (mcs-50)/50)) : 0;
-      const composite = 0.4*momN + 0.35*sentN + 0.25*scoreN;
-      let reco = 'HOLD';
-      if (composite >= 0.25) reco = 'BUY';
-      else if (composite <= -0.25) reco = 'SELL';
-
-      results.push({ symbol: s, momentum: mom, sentiment: sent, mcScore: Number.isFinite(mcs) ? mcs : null, rsi: Number.isFinite(rsi) ? rsi : null, pivot: Number.isFinite(piv) ? piv : null, score: Number(composite.toFixed(3)), recommendation: reco });
-    } catch {}
-  }
-
-  const top = results.sort((a,b)=> b.score - a.score).slice(0, Math.max(1, Math.min(100, Number.isFinite(limit)? limit : 10)));
-  res.json({ ok:true, data: top, meta: { days: lookback, total: results.length } });
-}));
-
 // Persist a daily snapshot of Top Picks (idempotent per date+symbol)
 router.post('/top-picks/snapshot', asyncHandler(async (req, res) => {
   const days = req.query.days ? Number(req.query.days) : (req.body?.days ? Number(req.body.days) : 60);
@@ -593,7 +563,9 @@ router.post('/yahoo/ingest/:symbol', asyncHandler(async (req, res) => {
   const input = String(req.params.symbol || '').toUpperCase();
   const symbol = resolveTicker(input, 'yahoo');
   const range = String(req.query.range || '1y');
-  const interval = String(req.query.interval || '1d');
+  const intervalRaw = String(req.query.interval || '1d');
+  const allowedIntervals: YahooInterval[] = ['1m','2m','5m','15m','30m','60m','90m','1h','1d','5d','1wk','1mo','3mo'];
+  const interval: YahooInterval = allowedIntervals.includes(intervalRaw as YahooInterval) ? intervalRaw as YahooInterval : '1d';
   const chart = await fetchYahooDaily(symbol, range, interval);
   const rows = parseYahooDaily(symbol, chart);
   if (!rows.length) {
@@ -611,7 +583,9 @@ router.get('/stocks/:symbol/yahoo-full', asyncHandler(async (req, res) => {
   const input = String(req.params.symbol || '').toUpperCase();
   const symbol = resolveTicker(input, 'yahoo');
   const range = String(req.query.range || '1y');
-  const interval = String(req.query.interval || '1d');
+  const intervalRaw = String(req.query.interval || '1d');
+  const allowedIntervals: YahooInterval[] = ['1m','2m','5m','15m','30m','60m','90m','1h','1d','5d','1wk','1mo','3mo'];
+  const interval: YahooInterval = allowedIntervals.includes(intervalRaw as YahooInterval) ? intervalRaw as YahooInterval : '1d';
   const modules = String(req.query.modules || 'price,summaryDetail,assetProfile,financialData,defaultKeyStatistics,earnings,recommendationTrend,balanceSheetHistory,cashflowStatementHistory,secFilings')
                     .split(',').map(s=>s.trim()).filter(Boolean);
   const [quote, chart, summary] = await Promise.all([

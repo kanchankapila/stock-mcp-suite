@@ -2,7 +2,11 @@ import { Api } from './app/services/api.service';
 import { Chart, registerables } from 'chart.js';
 Chart.register(...registerables);
 
-type YFin = any;
+type YFull = {
+  symbol: string; quote: any; chart: any; summary: any;
+};
+
+const api = new Api();
 
 function ensureCards() {
   const container = document.querySelector('main.content .container') || document.querySelector('main.content') || document.body;
@@ -46,31 +50,39 @@ function fmtNum(v: any): string {
 
 function text(v: any): string { return v==null ? '-' : String(v); }
 
-async function fetchYFin(symbol: string, period='1y', interval='1d'): Promise<YFin|null> {
-  try { const r = await fetch(`/api/stocks/${encodeURIComponent(symbol)}/yahoo-fin?period=${encodeURIComponent(period)}&interval=${encodeURIComponent(interval)}`); if (!r.ok) throw new Error(await r.text()); return await r.json(); } catch { return null; }
+async function fetchYahooData(symbol: string): Promise<YFull | null> {
+  try {
+    const r: any = await api.yahooFull(symbol, '1y', '1d', 'price,summaryDetail,assetProfile,financialData,defaultKeyStatistics,earnings');
+    if (!r?.ok) return null;
+    return r.data as YFull;
+  } catch { return null; }
 }
 
-function renderKpis(json: YFin) {
+function renderKpisFull(data: YFull) {
   const body = document.getElementById('yfinKpisBody');
   if (!body) return;
   try {
-    const live = Number(json?.live_price ?? NaN);
-    const qt = json?.quote_table || {};
-    const price = Number.isFinite(live) ? live.toFixed(2) : text(qt['Previous Close']);
-    const mcap = text(qt['Market Cap'] ?? (json?.stats_valuation?.[0]?.['Market Cap (intraday)'] ?? '-'));
-    const pe = text(qt['PE Ratio (TTM)'] ?? '-');
-    const eps = text(qt['EPS (TTM)'] ?? '-');
-    const beta = text(qt['Beta (5Y Monthly)'] ?? '-');
-    const div = text(qt['Forward Dividend & Yield'] ?? '-');
-    const range52 = text(qt['52 Week Range'] ?? '-');
+    const sm = data.summary?.result?.[0] || {};
+    const priceMod = sm.price || {};
+    const summaryDetail = sm.summaryDetail || {};
+    const stats = sm.defaultKeyStatistics || {};
+    const livePrice = priceMod.regularMarketPrice?.raw ?? priceMod.regularMarketPrice ?? data.quote?.price ?? null;
+    const prevClose = priceMod.regularMarketPreviousClose?.fmt || priceMod.regularMarketPreviousClose?.raw || priceMod.regularMarketPreviousClose;
+    const price = livePrice != null && isFinite(Number(livePrice)) ? Number(livePrice).toFixed(2) : (prevClose ?? '-');
+    const marketCap = (priceMod.marketCap?.fmt || summaryDetail.marketCap?.fmt || stats.marketCap?.fmt || '-');
+    const pe = priceMod.trailingPE?.fmt || summaryDetail.trailingPE?.fmt || stats.trailingPE?.fmt || '-';
+    const eps = priceMod.trailingEps?.fmt || stats.trailingEps?.fmt || '-';
+    const beta = priceMod.beta?.fmt || stats.beta?.fmt || '-';
+    const fwdDivYield = summaryDetail.dividendYield ? (Number(summaryDetail.dividendYield.raw)*100).toFixed(2)+'%' : (summaryDetail.trailingAnnualDividendYield ? (Number(summaryDetail.trailingAnnualDividendYield.raw)*100).toFixed(2)+'%' : '-');
+    const range52 = summaryDetail.fiftyTwoWeekRange?.fmt || `${summaryDetail.fiftyTwoWeekLow?.fmt || ''} - ${summaryDetail.fiftyTwoWeekHigh?.fmt || ''}`.trim() || '-';
     body.innerHTML = `
       <div class="grid-3" style="gap:12px; font-size:12px">
         <div><div class="muted">Price</div><div class="stat-sm">${price}</div></div>
-        <div><div class="muted">Market Cap</div><div class="stat-sm">${mcap}</div></div>
+        <div><div class="muted">Market Cap</div><div class="stat-sm">${marketCap}</div></div>
         <div><div class="muted">PE (TTM)</div><div class="stat-sm">${pe}</div></div>
         <div><div class="muted">EPS (TTM)</div><div class="stat-sm">${eps}</div></div>
         <div><div class="muted">Beta</div><div class="stat-sm">${beta}</div></div>
-        <div><div class="muted">Div/Yield</div><div class="stat-sm">${div}</div></div>
+        <div><div class="muted">Div/Yield</div><div class="stat-sm">${fwdDivYield}</div></div>
         <div><div class="muted">52W Range</div><div class="stat-sm">${range52}</div></div>
       </div>`;
   } catch {
@@ -78,25 +90,22 @@ function renderKpis(json: YFin) {
   }
 }
 
-function renderProfile(json: YFin) {
+function renderProfileFull(data: YFull) {
   const body = document.getElementById('yfinProfileBody');
   if (!body) return;
   try {
-    // yahoo_fin get_company_info returns DataFrame -> to_dict(); normalize common fields
-    const info = json?.info || {};
-    // Attempt common keys across shapes
-    const sector = info?.sector ?? info?.Sector ?? info?.sector?.Value ?? '-';
-    const industry = info?.industry ?? info?.Industry ?? info?.industry?.Value ?? '-';
-    const website = info?.website ?? info?.Website ?? info?.website?.Value ?? '';
-    const employees = info?.fullTimeEmployees ?? info?.FullTimeEmployees ?? info?.full_time_employees ?? '-';
-    const summary = info?.longBusinessSummary ?? info?.long_business_summary ?? '';
-    const holders = json?.holders || {};
-    const inst = holders?.institutional_holders ? JSON.stringify(holders.institutional_holders).length : 0;
+    const sm = data.summary?.result?.[0] || {};
+    const prof = sm.assetProfile || {};
+    const sector = prof.sector || '-';
+    const industry = prof.industry || '-';
+    const website = prof.website || '';
+    const employees = prof.fullTimeEmployees || prof.fulltimeEmployees || '-';
+    const summary = prof.longBusinessSummary || '';
     body.innerHTML = `
       <div class="grid-2" style="gap:12px; font-size:12px">
-        <div><div class="muted">Sector</div><div>${text(sector)}</div></div>
-        <div><div class="muted">Industry</div><div>${text(industry)}</div></div>
-        <div><div class="muted">Employees</div><div>${text(employees)}</div></div>
+        <div><div class="muted">Sector</div><div>${sector}</div></div>
+        <div><div class="muted">Industry</div><div>${industry}</div></div>
+        <div><div class="muted">Employees</div><div>${employees}</div></div>
         <div><div class="muted">Website</div><div>${website ? `<a href="${website}" target="_blank" rel="noopener">${website}</a>` : '-'}</div></div>
       </div>
       ${summary ? `<div class="muted" style="margin-top:8px">Summary</div><div style="margin-top:4px">${summary}</div>` : ''}
@@ -106,54 +115,51 @@ function renderProfile(json: YFin) {
   }
 }
 
-function renderFinancials(json: YFin) {
+function renderFinancialsFull(data: YFull) {
   const ctx = (document.getElementById('yfinFinChart') as HTMLCanvasElement)?.getContext('2d');
   const hint = document.getElementById('yfinFinHint');
   if (!ctx) return;
   try {
-    // Parse revenue series from income_statement
-    const isObj = json?.income_statement || {};
-    const revMap = isObj?.totalRevenue || isObj?.TotalRevenue || null;
+    const sm = data.summary?.result?.[0] || {};
+    const earnings = sm.earnings || {};
+    const chartData = earnings.earningsChart || {};
+    const quarterly: Array<any> = chartData.quarterly || [];
     const labels: string[] = [];
     const rev: number[] = [];
-    if (revMap && typeof revMap === 'object') {
-      const entries = Object.entries(revMap).filter(([k,_]) => /\d{4}/.test(String(k)) || /\d{4}-\d{2}-\d{2}/.test(String(k)));
-      entries.sort((a,b)=> String(a[0]) < String(b[0]) ? -1 : 1);
-      for (const [k,v] of entries) { labels.push(String(k)); rev.push(Number(v) || 0); }
+    const eps: number[] = [];
+    for (const q of quarterly.slice(-12)) {
+      labels.push(q.date || q.quarter || '');
+      rev.push(q.revenue?.raw ?? q.revenue ?? 0);
+      eps.push(q.actual?.raw ?? q.actual ?? q.epsActual ?? 0);
     }
-    // EPS from analysts_info (history) if present
-    const epsArr: Array<any> = json?.earnings_history || [];
-    const epsLabels: string[] = []; const eps: number[] = [];
-    if (Array.isArray(epsArr)) {
-      for (const row of epsArr.slice(-8)) {
-        const d = row?.startdatetime || row?.quarter || row?.endDate || '';
-        const val = Number(row?.epsactual ?? row?.epsActual ?? row?.eps_estimate ?? NaN);
-        if (d) epsLabels.push(String(d)); eps.push(Number.isFinite(val) ? val : 0);
+    // Fallback to financialData totalRevenue trend if quarterly empty
+    if (!labels.length) {
+      const fin = sm.financialData || {};
+      if (fin.totalRevenue?.raw) {
+        labels.push('Revenue'); rev.push(fin.totalRevenue.raw); eps.push(0);
       }
     }
-    // Build chart with two y-axes
-    const dataLabels = labels.length ? labels : epsLabels;
     const ds: any[] = [];
-    if (rev.length && dataLabels.length === labels.length) ds.push({ type:'bar', label:'Revenue', data: rev, yAxisID:'y1', backgroundColor:'#60a5fa' });
-    if (eps.length && dataLabels.length === epsLabels.length) ds.push({ type:'line', label:'EPS', data: eps, yAxisID:'y2', borderColor:'#34d399', backgroundColor:'rgba(52,211,153,0.15)', borderWidth:2, fill:true, tension:0.25, pointRadius:0 });
-    const chart = new Chart(ctx, { type:'bar', data: { labels: dataLabels, datasets: ds }, options: { responsive:true, plugins: { legend:{ position:'top' } }, scales: { y1: { type:'linear', position:'left', ticks:{ callback:(v)=> String(v) } }, y2: { type:'linear', position:'right', grid:{ drawOnChartArea:false } } } } });
-    if (hint) hint.textContent = 'Source: yahoo_fin';
+    if (rev.length) ds.push({ type: 'bar', label: 'Revenue', data: rev, yAxisID: 'y1', backgroundColor: '#60a5fa' });
+    if (eps.length) ds.push({ type: 'line', label: 'EPS', data: eps, yAxisID: 'y2', borderColor: '#34d399', backgroundColor: 'rgba(52,211,153,0.15)', borderWidth: 2, fill: true, tension: 0.25, pointRadius: 0 });
+    new Chart(ctx, { type: 'bar', data: { labels, datasets: ds }, options: { responsive: true, plugins: { legend: { position: 'top' } }, scales: { y1: { type: 'linear', position: 'left' }, y2: { type: 'linear', position: 'right', grid: { drawOnChartArea: false } } } } });
+    if (hint) hint.textContent = 'Source: Yahoo (backend)';
   } catch {
     if (hint) hint.textContent = 'No financials data';
   }
 }
 
-async function renderYahooFinCards(symbol: string) {
-  const yfin = await fetchYFin(symbol).catch(()=>null);
-  if (!yfin || yfin.ok === false) {
+async function renderYahooCards(symbol: string) {
+  const data = await fetchYahooData(symbol);
+  if (!data) {
     const k = document.getElementById('yfinKpisBody'); if (k) k.innerHTML = '<div class="muted">Failed to load KPIs</div>';
     const p = document.getElementById('yfinProfileBody'); if (p) p.innerHTML = '<div class="muted">Failed to load profile</div>';
     const h = document.getElementById('yfinFinHint'); if (h) h.textContent = 'Failed to load financials';
     return;
   }
-  renderKpis(yfin);
-  renderProfile(yfin);
-  renderFinancials(yfin);
+  renderKpisFull(data);
+  renderProfileFull(data);
+  renderFinancialsFull(data);
 }
 
 function currentSelectedSymbol(): string {
@@ -162,14 +168,14 @@ function currentSelectedSymbol(): string {
   return v ? v.toUpperCase() : v;
 }
 
-function attachYahooFinHandlers() {
+function attachYahooHandlers() {
   const sel = document.getElementById('stockSelect') as HTMLSelectElement | null;
-  if (sel) sel.addEventListener('change', () => { const s = currentSelectedSymbol(); if (s) renderYahooFinCards(s); });
+  if (sel) sel.addEventListener('change', () => { const s = currentSelectedSymbol(); if (s) renderYahooCards(s); });
 }
 
 window.addEventListener('DOMContentLoaded', () => {
   ensureCards();
-  attachYahooFinHandlers();
-  const s = currentSelectedSymbol(); if (s) renderYahooFinCards(s);
+  attachYahooHandlers();
+  const s = currentSelectedSymbol(); if (s) renderYahooCards(s);
 });
 

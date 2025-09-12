@@ -86,7 +86,8 @@ export async function etIndexConstituents(indexId: string, pageSize=500, pageNo=
 
 export async function mcPriceVolume(scId: string) {
   const id = scId.toUpperCase();
-  const url = `https://api.moneycontrol.com/mcapi/v1/stock/price-volume?scId=${encodeURIComponent(id)}`;
+  // Added ex=N & deviceType=W as Moneycontrol endpoints commonly expect these and may return 4xx without them
+  const url = `https://api.moneycontrol.com/mcapi/v1/stock/price-volume?scId=${encodeURIComponent(id)}&ex=N&deviceType=W`;
   return await fetchJson(url);
 }
 
