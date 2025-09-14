@@ -417,8 +417,9 @@ export function startYahooPrefetchFromStocklist() {
 
   // Separate scheduler: yahoo_fin KPIs and financials (default daily)
   (function startYahooFinScheduler() {
+    const DISABLED_ALL = String(process.env.PREFETCH_DISABLED || 'false').toLowerCase() === 'true';
     const ENABLE = String(process.env.PREFETCH_YFIN_ENABLE || 'true').toLowerCase() === 'true';
-    if (!ENABLE) return;
+    if (DISABLED_ALL || !ENABLE) return;
     const YFIN_BATCH = Number(process.env.PREFETCH_YFIN_BATCH || 25);
     const YFIN_INTERVAL_MS = Number(process.env.PREFETCH_YFIN_INTERVAL_MS || 86_400_000); // 24 hours
     const YFIN_COOLDOWN_MS = Number(process.env.PREFETCH_YFIN_COOLDOWN_MS || 60_000);

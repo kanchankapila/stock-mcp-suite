@@ -12,5 +12,5 @@
     "skipLibCheck": true
   },
   "include": ["src/**/*.ts", "stocklist.ts"],
-  "exclude": ["node_modules", "scripts"]
+  "exclude": ["node_modules", "scripts", "src/providers/prefetch.ts"]
 }

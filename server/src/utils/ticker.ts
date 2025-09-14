@@ -23,7 +23,7 @@ function providerConfig(provider: Provider) {
       `TICKER_${p}_KEY`,
       provider === 'news' ? 'name' : provider === 'mc' ? 'mcsymbol' : provider === 'trendlyne' ? 'tlid' : 'symbol'
     ),
-    suffix: getEnv(`TICKER_${p}_SUFFIX`, provider === 'yahoo' ? '.NS' : ''),
+    suffix: getEnv(`TICKER_${p}_SUFFIX`, ''),
   } as { key: keyof Entry, suffix: string };
 }
 
@@ -97,8 +97,8 @@ export function listTickerProvidersFromEnv(): string[] {
     const m = /^TICKER_([A-Z0-9_]+)_KEY$/.exec(k);
     if (m) provs.add(m[1].toLowerCase());
   }
-  // Ensure common defaults even if not in env
-  ['yahoo','news','alpha','mc','trendlyne','yFin'].forEach(p=> provs.add(p));
+  // Ensure common defaults even if not in env (Yahoo removed)
+  ['news','alpha','mc','trendlyne'].forEach(p=> provs.add(p));
   return Array.from(provs);
 }
 

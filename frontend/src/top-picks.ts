@@ -5,6 +5,30 @@ import { Api } from './app/services/api.service';
   const hint = document.getElementById('tpHint');
   const btn = document.getElementById('tpRefresh');
   const daysEl = document.getElementById('tpDays') as HTMLInputElement | null;
+  // Inject filters: limit + symbol search
+  try {
+    const parent = btn?.parentElement || null;
+    if (parent && !document.getElementById('tpLimit')) {
+      const wrap = document.createElement('label');
+      wrap.style.display = 'flex';
+      wrap.style.alignItems = 'center';
+      wrap.style.gap = '6px';
+      wrap.style.marginLeft = '12px';
+      const lab = document.createElement('span'); lab.className = 'muted'; lab.textContent = 'Limit:';
+      const inp = document.createElement('input'); inp.type = 'number'; inp.min = '1'; inp.step = '1'; inp.value = '10'; inp.id = 'tpLimit'; inp.style.width = '80px';
+      wrap.appendChild(lab); wrap.appendChild(inp); parent.appendChild(wrap);
+    }
+    if (parent && !document.getElementById('tpFilter')) {
+      const wrap = document.createElement('label');
+      wrap.style.display = 'flex';
+      wrap.style.alignItems = 'center';
+      wrap.style.gap = '6px';
+      wrap.style.marginLeft = '12px';
+      const lab = document.createElement('span'); lab.className = 'muted'; lab.textContent = 'Filter:';
+      const inp = document.createElement('input'); inp.type = 'text'; inp.placeholder = 'symbol…'; inp.id = 'tpFilter'; inp.style.width = '120px';
+      wrap.appendChild(lab); wrap.appendChild(inp); parent.appendChild(wrap);
+    }
+  } catch {}
   try {
     const parent = btn?.parentElement || null;
     if (parent && !document.getElementById('tpOnlyBuys')) {
@@ -33,7 +57,10 @@ import { Api } from './app/services/api.service';
     const n = daysEl ? Number(daysEl.value || 0) : 60;
     const days = (Number.isFinite(n) && n > 0) ? n : 60;
     try {
-      const res = await new Api().topPicks(days, 10);
+      const limEl = document.getElementById('tpLimit') as HTMLInputElement | null;
+      const limN = limEl ? Number(limEl.value||10) : 10;
+      const limit = (Number.isFinite(limN) && limN>0) ? limN : 10;
+      const res = await new Api().topPicks(days, limit);
       let arr: Array<any> = res?.data || [];
       // Fetch yesterday ranks
       let prevRanks = new Map<string, number>();
@@ -52,6 +79,11 @@ import { Api } from './app/services/api.service';
       // Filters & guards
       const only = (document.getElementById('tpOnlyBuys') as HTMLInputElement | null)?.checked ?? false;
       if (only) arr = arr.filter(r => String(r.recommendation||'').toUpperCase() === 'BUY');
+      // Symbol filter
+      const f = (document.getElementById('tpFilter') as HTMLInputElement | null)?.value?.trim().toLowerCase() || '';
+      if (f) arr = arr.filter(r => String(r.symbol||'').toLowerCase().includes(f));
+      // Enforce limit on display just in case
+      arr = arr.slice(0, limit);
       if (!arr.length) { if (body) body.innerHTML = '<div class="muted">No picks yet. Ingest first or try later.</div>'; return; }
 
       const showContrib = (document.getElementById('tpShowContrib') as HTMLInputElement | null)?.checked ?? false;
@@ -100,12 +132,19 @@ import { Api } from './app/services/api.service';
           + '</tr>';
       }).join('');
       if (body) body.innerHTML = `<table style=\"width:100%; border-collapse:collapse\">${head}${rows}</table>`;
-      if (hint) (hint as HTMLElement).textContent = `days=${days}, total=${res?.meta?.total ?? arr.length}`;
+      if (hint) (hint as HTMLElement).textContent = `days=${days}, limit=${limit}, total=${res?.meta?.total ?? arr.length}`;
     } catch (e:any) {
       if (body) body.innerHTML = `<div class=\"mono\" style=\"color:#ff6b6b\">${String(e?.message || e)}</div>`;
     }
   }
   btn?.addEventListener('click', render);
+  // Re-render on filter changes
+  try {
+    document.getElementById('tpOnlyBuys')?.addEventListener('change', render);
+    document.getElementById('tpShowContrib')?.addEventListener('change', render);
+    document.getElementById('tpLimit')?.addEventListener('change', render);
+    document.getElementById('tpFilter')?.addEventListener('input', () => { /* debounce-lite */ setTimeout(render, 50); });
+  } catch {}
   render();
 })();
 

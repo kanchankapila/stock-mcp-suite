@@ -1,4 +1,5 @@
 import fetch from 'node-fetch';
+import type { Response as NFResponse } from 'node-fetch';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -6,6 +7,21 @@ import { logger } from '../utils/logger.js';
 
 let TL_COOKIE_CACHE: { cookie: string, ts: number } | null = null;
 const CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours persisted cache default
+const FETCH_TIMEOUT_MS = 7000; // default timeout for TL fetches
+const COOKIE_PER_URL_TIMEOUT_MS = 4000; // per-provider timeout for cookie endpoints
+const COOKIE_OVERALL_TIMEOUT_MS = 7000; // overall timeout to race cookie providers
+
+function delay(ms: number) { return new Promise(res => setTimeout(res, ms)); }
+
+async function fetchWithTimeout(url: string, opts: any = {}, timeoutMs: number = FETCH_TIMEOUT_MS): Promise<NFResponse> {
+  const ctrl = new AbortController();
+  const id = setTimeout(() => ctrl.abort(), Math.max(1000, timeoutMs));
+  try {
+    return await fetch(url, { ...(opts||{}), signal: ctrl.signal } as any);
+  } finally {
+    clearTimeout(id);
+  }
+}
 
 function getCachePath() {
   const fromEnv = process.env.TL_COOKIE_CACHE_PATH;
@@ -65,22 +81,44 @@ export async function fetchTrendlyneCookie(force=false): Promise<string | null> 
     }
   }
   const urls = getCookieProviderUrls();
-  for (const u of urls) {
+  // Helper to fetch cookie from a single URL with timeout
+  const one = async (u: string) => {
     try {
-      const res = await fetch(u);
-      if (!res.ok) continue;
+      const t0 = Date.now();
+      const res = await fetchWithTimeout(u, {}, COOKIE_PER_URL_TIMEOUT_MS);
+      if (!res.ok) throw new Error(`cookie_${res.status}`);
       const text = await res.text();
       // Try JSON first
       try {
         const j = JSON.parse(text);
         const ck = j.cookie || j.Cookie || j.COOKIES || null;
-        if (ck) { TL_COOKIE_CACHE = { cookie: ck, ts: now }; saveCookieToFile(ck); return ck; }
+        if (ck) { logger.info({ url: u, ms: Date.now()-t0 }, 'trendlyne_cookie_provider_ok'); return String(ck); }
       } catch {}
-      // Otherwise raw cookie string
-      if (text && text.length > 8) { const ck = text.trim(); TL_COOKIE_CACHE = { cookie: ck, ts: now }; saveCookieToFile(ck); return ck; }
-    } catch (err) { logger.warn({ err, url: u }, 'trendlyne_cookie_fetch_failed'); }
+      if (text && text.length > 8) { logger.info({ url: u, ms: Date.now()-t0 }, 'trendlyne_cookie_provider_ok_text'); return text.trim(); }
+      throw new Error('cookie_empty');
+    } catch (err) {
+      logger.warn({ url: u, err: (err as any)?.message || String(err) }, 'trendlyne_cookie_provider_failed');
+      throw err;
+    }
+  };
+  // Race all providers; return first cookie
+  const tasks = urls.map(u => new Promise<string>(async (resolve, reject) => {
+    try {
+      const ck = await one(u);
+      if (ck) return resolve(ck);
+      reject(new Error('no_cookie'));
+    } catch (e) { reject(e as any); }
+  }));
+  const overall = new Promise<string>((_resolve, reject) => setTimeout(() => reject(new Error('cookie_overall_timeout')), COOKIE_OVERALL_TIMEOUT_MS));
+  try {
+    const ck = await Promise.any<string>([overall as any, ...tasks]);
+    TL_COOKIE_CACHE = { cookie: ck, ts: now };
+    saveCookieToFile(ck);
+    return ck;
+  } catch (err) {
+    logger.error({ err: (err as any)?.message || String(err) }, 'trendlyne_cookie_race_failed');
+    return null;
   }
-  return null;
 }
 
 async function tlFetch(path: string) {
@@ -92,8 +130,9 @@ async function tlFetch(path: string) {
   };
   if (ck) headers['Cookie'] = ck;
   const url = `${base}${path}`;
+  const t0 = Date.now();
   logger.info({ url, withCookie: !!ck }, 'trendlyne_fetch_start');
-  let res = await fetch(url, { headers });
+  let res = await fetchWithTimeout(url, { headers }, FETCH_TIMEOUT_MS);
   // If unauthorized/forbidden, force-refresh cookie once
   if (res.status === 401 || res.status === 403) {
     await fetchTrendlyneCookie(true);
@@ -101,13 +140,19 @@ async function tlFetch(path: string) {
     const headers2 = { ...headers };
     if (ck2) headers2['Cookie'] = ck2;
     logger.warn({ url }, 'trendlyne_retry_after_cookie_refresh');
-    res = await fetch(url, { headers: headers2 });
+    res = await fetchWithTimeout(url, { headers: headers2 }, FETCH_TIMEOUT_MS);
+  }
+  // One soft retry on transient upstream errors
+  if (!res.ok && [502,503,504].includes(res.status)) {
+    await delay(300);
+    logger.warn({ url, status: res.status }, 'trendlyne_fetch_retry_transient');
+    res = await fetchWithTimeout(url, { headers }, FETCH_TIMEOUT_MS);
   }
   if (!res.ok) {
-    logger.error({ url, status: res.status }, 'trendlyne_fetch_failed');
+    logger.error({ url, status: res.status, ms: Date.now()-t0 }, 'trendlyne_fetch_failed');
     throw new Error(`trendlyne_${res.status}`);
   }
-  logger.info({ url, status: res.status }, 'trendlyne_fetch_ok');
+  logger.info({ url, status: res.status, ms: Date.now()-t0 }, 'trendlyne_fetch_ok');
   try { return await res.json(); } catch { return await res.text(); }
 }
 
@@ -261,18 +306,24 @@ export async function tlFetchAbsolute(url: string) {
     'X-Requested-With': 'XMLHttpRequest'
   };
   if (ck) headers['Cookie'] = ck;
+  const t0 = Date.now();
   logger.info({ url, withCookie: !!ck }, 'trendlyne_fetch_abs_start');
-  let res = await fetch(url, { headers } as any);
+  let res = await fetchWithTimeout(url, { headers } as any, FETCH_TIMEOUT_MS);
   if (res.status === 401 || res.status === 403) {
     await fetchTrendlyneCookie(true);
     const ck2 = TL_COOKIE_CACHE?.cookie || null;
     const headers2 = { ...headers } as Record<string,string>;
     if (ck2) headers2['Cookie'] = ck2;
     logger.warn({ url }, 'trendlyne_abs_retry_after_cookie_refresh');
-    res = await fetch(url, { headers: headers2 } as any);
+    res = await fetchWithTimeout(url, { headers: headers2 } as any, FETCH_TIMEOUT_MS);
+  }
+  if (!res.ok && [502,503,504].includes(res.status)) {
+    await delay(300);
+    logger.warn({ url, status: res.status }, 'trendlyne_fetch_abs_retry_transient');
+    res = await fetchWithTimeout(url, { headers } as any, FETCH_TIMEOUT_MS);
   }
   if (!res.ok) {
-    logger.error({ url, status: res.status }, 'trendlyne_fetch_abs_failed');
+    logger.error({ url, status: res.status, ms: Date.now()-t0 }, 'trendlyne_fetch_abs_failed');
     throw new Error(`trendlyne_${res.status}`);
   }
   try { return await res.json(); } catch { return await res.text(); }

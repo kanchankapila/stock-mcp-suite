@@ -1,8 +1,11 @@
 export class Api {
-  // Prefer Vite env var; otherwise use relative path so Vite proxy can handle it
+  // Prefer Vite env var; otherwise fall back to same-host :4010
   constructor(
-    private base = (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_API_BASE) || ''
-  ) {}
+    private base = ((typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_API_BASE) || '')
+  ) {
+    // If no base provided, try to infer a sensible default so prod/static builds still work
+    if (!this.base) this.base = this.serverBaseFallback();
+  }
 
   private serverBaseFallback() {
     try {
@@ -204,16 +207,18 @@ export class Api {
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   }
-  async tlSmaBySymbol(symbol: string) {
+  async tlSmaBySymbol(symbol: string, opts?: { force?: boolean }) {
     const url = new URL(`${this.base}/api/external/trendlyne/sma`, window.location.origin);
     url.searchParams.set('symbol', symbol);
+    if (opts?.force) url.searchParams.set('force', 'true');
     const res = await fetch(url.toString());
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   }
-  async tlSmaByTlid(tlid: string) {
+  async tlSmaByTlid(tlid: string, opts?: { force?: boolean }) {
     const url = new URL(`${this.base}/api/external/trendlyne/sma`, window.location.origin);
     url.searchParams.set('tlid', tlid);
+    if (opts?.force) url.searchParams.set('force', 'true');
     const res = await fetch(url.toString());
     if (!res.ok) throw new Error(await res.text());
     return res.json();

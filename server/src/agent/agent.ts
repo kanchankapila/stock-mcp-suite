@@ -3,7 +3,6 @@ import { sentimentScore } from '../analytics/sentiment.js';
 import { predictNextClose } from '../analytics/predict.js';
 import { backtestSMA, scoreStrategy } from '../analytics/backtest.js';
 import { retrieve as legacyRetrieve } from '../rag/retriever.js';
-import { fetchYahooDaily, parseYahooDaily } from '../providers/yahoo.js';
 import { fetchStooqDaily } from '../providers/stooq.js';
 import { fetchNews, parseNews } from '../providers/news.js';
 import { fetchMcInsights } from '../providers/moneycontrol.js';
@@ -43,29 +42,18 @@ export async function agentAnswer(prompt: string, explicitSymbol?: string) {
   const messages: string[] = [];
   // On-demand ingest pipeline
   if (wantIngest) {
-    const yahooSymbol = resolveTicker(symbol, 'yahoo');
+    const sym = symbol;
     const newsQuery = resolveTicker(symbol, 'news');
-    let rows: any[] = [];
-    try {
-      const chart = await fetchYahooDaily(yahooSymbol, '1y', '1d');
-      rows = parseYahooDaily(yahooSymbol, chart);
-    } catch (err) {
-      if (String(process.env.INGEST_USE_STOOQ_FALLBACK || 'true') === 'true') {
-        rows = await fetchStooqDaily(yahooSymbol);
-        messages.push('Yahoo failed; used Stooq fallback.');
-      } else {
-        throw err as any;
-      }
-    }
+    const rows = await fetchStooqDaily(sym);
     rows.forEach(r => insertPriceRow(r));
     const NA = process.env.NEWS_API_KEY;
     const newsJson = await fetchNews(newsQuery, NA);
-    const news = parseNews(yahooSymbol, newsJson);
+    const news = parseNews(sym, newsJson);
     for (const n of news) {
       const s = sentimentScore([`${n.title}. ${n.summary}`]);
-      insertNewsRow({ id: n.id, symbol: yahooSymbol, date: n.date, title: n.title, summary: n.summary, url: n.url, sentiment: s });
+      insertNewsRow({ id: n.id, symbol: sym, date: n.date, title: n.title, summary: n.summary, url: n.url, sentiment: s });
     }
-    upsertStock(yahooSymbol, symbol);
+    upsertStock(sym, symbol);
     messages.push(`Ingested: prices=${rows.length}, news=${news.length}`);
   }
 
@@ -138,7 +126,6 @@ export async function agentAnswer(prompt: string, explicitSymbol?: string) {
   }
   if (wantResolve) {
     resolved = {
-      yahoo: resolveTicker(symbol, 'yahoo'),
       news: resolveTicker(symbol, 'news'),
       alpha: resolveTicker(symbol, 'alpha'),
       mc: resolveTicker(symbol, 'mc')
@@ -162,7 +149,7 @@ export async function agentAnswer(prompt: string, explicitSymbol?: string) {
     wantBacktest && bt ? `Backtest total return: ${(bt.totalReturn*100).toFixed(2)}% (fast=${bt.fast}, slow=${bt.slow})` : null,
     ragAnswer ? `RAG Answer: ${ragAnswer}` : null,
     ragSnippets.length ? `Top context: ${ragSnippets.map(r=>`- ${String((r as any).text || '').slice(0,160)}`).join(' | ')}` : null,
-    wantResolve && resolved ? `IDs: yahoo=${resolved.yahoo}, news=${resolved.news}, alpha=${resolved.alpha}, mc=${resolved.mc}` : null,
+    wantResolve && resolved ? `IDs: news=${resolved.news}, alpha=${resolved.alpha}, mc=${resolved.mc}` : null,
     wantMc && mc ? `MC Insight: ${mc.shortDesc || ''} (Score: ${mc.stockScore ?? '-'}). ${mc.longDesc || ''}` : null,
     wantDbStats && dbstats ? `DB: prices=${dbstats.prices.count} (${dbstats.prices.firstDate}..${dbstats.prices.lastDate}), news=${dbstats.news.count}, docs=${dbstats.docs.count}` : null
   ].filter(Boolean).join('\n');

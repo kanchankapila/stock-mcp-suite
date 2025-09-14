@@ -58,6 +58,8 @@ ALPHA_VANTAGE_KEY=your_alpha_vantage_key
 NEWS_API_KEY=your_newsapi_key
 ```
 
+For a full end-to-end setup (server + jobs + ML + frontend), see `docs/GETTING_STARTED.md`.
+
 ### Provider Ticker Mapping
 The server resolves identifiers per provider using `server/stocklist.ts` and env-configurable rules. By default:
 
@@ -107,6 +109,77 @@ Introspect the provider mappings and resolve a given input (symbol/name/isin/mcs
       ]
     }
     ```
+
+## Providers Setup
+
+This project integrates multiple market/news providers. All are optional — if a key or credential is missing, the server uses safe fallbacks (sample data where available).
+
+- Yahoo Finance
+  - No API key required; uses public endpoints with rotating bases and client headers.
+  - Used for historical prices, quote summary modules, and charts.
+  - Config: `TICKER_YAHOO_KEY` (default `symbol`), `TICKER_YAHOO_SUFFIX` (default `.NS`).
+
+- Moneycontrol (Insights + Technicals)
+  - No API key, but endpoints can be rate-limited or shape-shift occasionally.
+  - Technicals used for indicators, pivots, SMA/EMA tables; Insights used for summary text and score.
+  - Config: `TICKER_MC_KEY` (default `mcsymbol`).
+
+- Trendlyne (SMA & Advanced Technicals)
+  - Cookie-backed. You can supply credentials for headless refresh or a cookie string.
+  - Env options:
+    - `TRENDLYNE_EMAIL`, `TRENDLYNE_PASSWORD` for headless cookie refresh.
+    - `TL_COOKIE` direct cookie, or `TL_COOKIE_URLS` (comma-separated) to fetch from a proxy endpoint.
+    - `TL_COOKIE_CACHE_PATH` for on-disk cache.
+  - A BullMQ job periodically caches TL SMA and Advanced Technicals in the `tl_cache` table. Read via:
+    - `GET /api/tl-cache/by-symbol/:symbol?kind=sma|adv`
+    - `GET /api/tl-cache/:tlid?kind=sma|adv`
+
+- NewsAPI
+  - Key: `NEWS_API_KEY` (https://newsapi.org/).
+  - If missing or rate-limited (429), code falls back to sample news if `NEWS_FALLBACK_TO_SAMPLE_ON_429=true`.
+  - Config: `TICKER_NEWS_KEY` (default `name`).
+
+- AlphaVantage (optional fallback)
+  - Key: `ALPHAVANTAGE_API_KEY`.
+  - Used as an optional price fallback when Yahoo is unavailable.
+
+### Jobs / Scheduling
+
+BullMQ-based repeatable jobs are feature-flagged by `ENABLE_JOBS=true` and require Redis (`REDIS_URL`).
+
+- Queues: `ingest:prices`, `ingest:news`, `ingest:tl`, `rag:reindex`, `top-picks:snapshot`, `features:build`.
+- Cron envs: `CRON_PRICES`, `CRON_NEWS`, `CRON_TRENDLYNE`, `CRON_RAG`, `CRON_FEATURES`.
+- Tuning: `JOB_BATCH`, `JOB_ATTEMPTS`, `JOB_BACKOFF_MS`, `JOB_CONCURRENCY_*` (per queue).
+- Health: `GET /api/jobs/status` returns job metrics (runs, lastMs, avgMs).
+
+## Frontend Features
+
+The frontend (Vite + TypeScript cards) includes:
+
+- Strategy Lab (Backtesting)
+  - Run strategies (MA Crossover, Momentum) with parameters (fast/slow MAs), symbol list, date range.
+  - Visuals: equity curve, drawdown chart, benchmark overlay (normalized close), metrics (Sharpe, MaxDD).
+  - Export: equity series and metrics as JSON.
+
+- Predictions
+  - Triggers `/api/predict/:symbol` and displays model output and confidence when ML is enabled (`ENABLE_ML=true`).
+
+- Provider & Jobs Health
+  - A dedicated Health tab shows `/api/health/providers` and `/api/jobs/status` (runs, last latency, avg latency).
+
+- Watchlist & Alerts
+  - Watchlist with sortable table, sparklines, and basic metrics.
+  - Alerts placeholder for defining rules on price/volume/RSI/sentiment.
+
+### Stored Features API (UI consumption)
+
+Use stored features to drive custom charts without recomputing via ML:
+
+- `GET /api/features-stored/:symbol?days=60`
+- `GET /api/features-stored/:symbol?from=YYYY-MM-DD&to=YYYY-MM-DD`
+
+Response contains rows with `date, ret1, ret5, ret20, vol, rsi, sma20, ema50, momentum, sent_avg, pcr, pvr`.
+
 
 - `GET /api/resolve/:input`
   - Resolves `:input` for all providers and returns both a map and backwards-compatible top-level fields.

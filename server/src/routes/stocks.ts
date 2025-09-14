@@ -1,10 +1,9 @@
 import { Router } from 'express';
-import db, { upsertStock, insertPriceRow, insertNewsRow, listPrices, listNews, saveAnalysis, getMcTech, upsertMcTech, upsertYahooCache, getLatestOptionsBias, listOptionsMetrics } from '../db.js';
+import db, { upsertStock, insertPriceRow, insertNewsRow, listPrices, listNews, saveAnalysis, getMcTech, upsertMcTech, getLatestOptionsBias, listOptionsMetrics } from '../db.js';
 import { fetchDailyTimeSeries, parseAlphaDaily } from '../providers/alphaVantage.js';
 import { fetchNews, parseNews } from '../providers/news.js';
 import { fetchMcInsights, fetchMcTech } from '../providers/moneycontrol.js';
-import { fetchYahooDaily, parseYahooDaily, fetchYahooQuoteSummary, fetchYahooQuote } from '../providers/yahoo.js';
-import { fetchYahooFin } from '../providers/yahooFin.js';
+// Yahoo providers removed
 import { fetchStooqDaily } from '../providers/stooq.js';
 import { sentimentScore } from '../analytics/sentiment.js';
 import { predictNextClose } from '../analytics/predict.js';
@@ -21,43 +20,36 @@ import { spawn } from 'child_process';
 
 export const router = Router();
 
+// Resolve provider-specific identifiers for a given input
+router.get('/resolve/:input', asyncHandler(async (req, res) => {
+  const raw = String(req.params.input || '').toUpperCase();
+  const base = raw.includes('.') ? raw.split('.')[0] : raw;
+  const entry = findStockEntry(base) || null;
+  const providers = listTickerProvidersFromEnv().map(p => ({
+    provider: p,
+    key: getProviderResolutionConfig(p as any).key,
+    value: resolveTicker(base, p as any)
+  }));
+  res.json({ ok: true, data: { input: raw, entry, providers } });
+}));
+
 router.post('/ingest/:symbol', asyncHandler(async (req, res) => {
   try {
     const input = String(req.params.symbol || '').toUpperCase();
     const { name } = req.body || {};
     const NA = process.env.NEWS_API_KEY;
 
-    // Provider-specific identifiers
-    const yahooSymbol = resolveTicker(input, 'yahoo');
+    // Provider-specific identifiers (Yahoo removed)
+    const symbol = input; // use raw symbol for storage/lookup
     const newsQuery = resolveTicker(input, 'news');
 
-    logger.info({ input, yahooSymbol, newsQuery }, 'ingest_start');
+    logger.info({ input, symbol, newsQuery }, 'ingest_start');
     const messages: string[] = [];
     if (!NA) messages.push('NewsAPI: using sample data (no API key set).');
-    // Fetch prices from Yahoo by default
-    let rows;
-    try {
-      const chart = await fetchYahooDaily(yahooSymbol, '1y', '1d');
-      rows = parseYahooDaily(yahooSymbol, chart);
-    } catch (err) {
-      logger.warn({ err, symbol: yahooSymbol }, 'yahoo_daily_failed_ingest');
-      if (String(process.env.INGEST_USE_STOOQ_FALLBACK || 'true') === 'true') {
-        try {
-          rows = await fetchStooqDaily(yahooSymbol);
-        } catch (e2) {
-          logger.error({ err: e2, symbol: yahooSymbol }, 'stooq_fallback_failed_ingest');
-          const e: any = new Error(String((err as any)?.message || err));
-          e.status = 502;
-          throw e; // end ingest with explicit status
-        }
-      } else {
-        const e: any = new Error(String((err as any)?.message || err));
-        e.status = 502;
-        throw e;
-      }
-    }
+    // Fetch prices from Stooq (Yahoo removed)
+    let rows = await fetchStooqDaily(symbol);
     if (!rows.length) {
-      const err: any = new Error('No price data returned from Yahoo.');
+      const err: any = new Error('No price data returned.');
       err.status = 502;
       throw err;
     }
@@ -66,19 +58,19 @@ router.post('/ingest/:symbol', asyncHandler(async (req, res) => {
     let news: Array<{id:string,date:string,title:string,summary:string,url:string}> = [];
     try {
       const newsJson = await fetchNews(newsQuery, NA);
-      news = parseNews(yahooSymbol, newsJson);
+      news = parseNews(symbol, newsJson);
     } catch (e:any) {
       const msg = String(e?.message || e);
       if (/429/.test(msg)) {
-        logger.warn({ symbol: yahooSymbol, err: msg }, 'news_rate_limited_ingest');
+        logger.warn({ symbol, err: msg }, 'news_rate_limited_ingest');
         const FALLBACK_ON_429 = String(process.env.NEWS_FALLBACK_TO_SAMPLE_ON_429 ?? 'true').toLowerCase() === 'true';
         if (FALLBACK_ON_429) {
           messages.push('NewsAPI: rate limited (429). Using sample data.');
           try {
             const sampleJson = await fetchNews(newsQuery, undefined);
-            news = parseNews(yahooSymbol, sampleJson);
+            news = parseNews(symbol, sampleJson);
           } catch (e2:any) {
-            logger.warn({ symbol: yahooSymbol, err: e2?.message || e2 }, 'news_sample_fallback_failed');
+            logger.warn({ symbol, err: e2?.message || e2 }, 'news_sample_fallback_failed');
             news = [];
           }
         } else {
@@ -91,7 +83,7 @@ router.post('/ingest/:symbol', asyncHandler(async (req, res) => {
     }
     // NewsAPI may also be rate limited; allow zero news but log
     if (!news.length) {
-      logger.warn({ symbol: yahooSymbol }, 'news_zero_articles');
+      logger.warn({ symbol }, 'news_zero_articles');
       messages.push('NewsAPI: zero articles returned.');
     }
 
@@ -105,119 +97,23 @@ router.post('/ingest/:symbol', asyncHandler(async (req, res) => {
         const date = new Date().toISOString();
         const id = `mc:insights:${mc.scId}`;
         const sent = sentimentScore([`${title}. ${summary}`]);
-        insertNewsRow({ id, symbol: yahooSymbol, date, title, summary, url: 'https://www.moneycontrol.com/', sentiment: sent });
+        insertNewsRow({ id, symbol, date, title, summary, url: 'https://www.moneycontrol.com/', sentiment: sent });
         messages.push('Moneycontrol insights ingested.');
       }
     }
 
-    // Yahoo_fin profile & KPIs + financials summary -> sentiment + RAG docs + options metrics
-    try {
-      const yfin = await fetchYahooFin(yahooSymbol, '1y', '1d').catch(()=>null);
-      if (yfin && yfin.ok !== false) {
-        const qt = (yfin as any).quote_table || {};
-        const info = (yfin as any).info || {};
-        const sector = info.sector || info.Sector || '';
-        const industry = info.industry || info.Industry || '';
-        const website = info.website || info.Website || '';
-        const summary = info.longBusinessSummary || info.long_business_summary || '';
-        const mcap = qt['Market Cap'] || qt['Market Cap (intraday)'] || '';
-        const pe = qt['PE Ratio (TTM)'] || '';
-        const eps = qt['EPS (TTM)'] || '';
-        const kpiText = `Sector: ${sector}. Industry: ${industry}. Market Cap: ${mcap}. PE: ${pe}. EPS: ${eps}. ${summary}`.trim();
-        const makeFinSummary = () => {
-          try {
-            // Revenue trend
-            const isObj = (yfin as any)?.income_statement || {};
-            const revMap = isObj?.totalRevenue || isObj?.TotalRevenue || null;
-            let revSummary = '';
-            if (revMap && typeof revMap === 'object') {
-              const entries = Object.entries(revMap).filter(([k,_]) => /(\d{4}(-\d{2}-\d{2})?)/.test(String(k))).sort((a,b)=> String(a[0]) < String(b[0]) ? -1 : 1);
-              const nums = entries.map(([,v]) => Number(v)).filter(n=> Number.isFinite(n));
-              if (nums.length >= 2) {
-                const first = nums[0], last = nums[nums.length-1];
-                const pct = first !== 0 ? ((last-first)/Math.abs(first))*100 : 0;
-                revSummary = `Revenue ${pct>=0? 'increased':'decreased'} ${Math.abs(pct).toFixed(1)}% over ${entries.length} periods.`;
-              }
-            }
-            // Operating cash flow trend
-            const cfObj = (yfin as any)?.cash_flow || {};
-            const ocfMap = (cfObj?.totalCashFromOperatingActivities) || (cfObj?.TotalCashFromOperatingActivities) || null;
-            let ocfSummary = '';
-            if (ocfMap && typeof ocfMap === 'object') {
-              const entries = Object.entries(ocfMap).filter(([k,_]) => /(\d{4}(-\d{2}-\d{2})?)/.test(String(k))).sort((a,b)=> String(a[0]) < String(b[0]) ? -1 : 1);
-              const nums = entries.map(([,v]) => Number(v)).filter(n=> Number.isFinite(n));
-              if (nums.length >= 2) {
-                const first = nums[0], last = nums[nums.length-1];
-                const pct = first !== 0 ? ((last-first)/Math.abs(first))*100 : 0;
-                ocfSummary = `Operating cash flow ${pct>=0? 'increased':'decreased'} ${Math.abs(pct).toFixed(1)}% over ${entries.length} periods.`;
-              }
-            }
-            // Margins from stats
-            let marginsSummary = '';
-            try {
-              const statsArr: Array<any> = Array.isArray((yfin as any)?.stats) ? (yfin as any).stats : [];
-              const findAttr = (name: string) => {
-                const row = (statsArr || []).find((r: any) => new RegExp(name, 'i').test(String(r?.Attribute || r?.attribute || '')));
-                return row ? (row?.Value ?? row?.value ?? '') : '';
-              };
-              const pm = String(findAttr('Profit Margin'));
-              const om = String(findAttr('Operating Margin')) || String(findAttr('Operating Margin (ttm)'));
-              const pmNum = (()=>{ const m = pm.match(/-?\d+(\.\d+)?/); return m ? Number(m[0]) : NaN; })();
-              const omNum = (()=>{ const m = om.match(/-?\d+(\.\d+)?/); return m ? Number(m[0]) : NaN; })();
-              const parts = [] as string[];
-              if (Number.isFinite(pmNum)) parts.push(`Profit margin ${pmNum.toFixed(1)}%`);
-              if (Number.isFinite(omNum)) parts.push(`Operating margin ${omNum.toFixed(1)}%`);
-              if (parts.length) marginsSummary = parts.join(', ') + '.';
-            } catch {}
-            return [revSummary, ocfSummary, marginsSummary].filter(Boolean).join(' ');
-          } catch { return ''; }
-        };
-        const finText = makeFinSummary();
-        const date = new Date().toISOString();
-        const texts: Array<{ text: string; metadata: any }> = [];
-        if (kpiText) {
-          const sid = `yfin:profile:${yahooSymbol}`;
-          const s = sentimentScore([kpiText]);
-          insertNewsRow({ id: sid, symbol: yahooSymbol, date, title: 'Yahoo Profile & KPIs', summary: kpiText.slice(0, 960), url: website || 'https://finance.yahoo.com/', sentiment: s });
-          texts.push({ text: kpiText, metadata: { date: date.slice(0,10), source: 'yahoo_fin', url: website || '' } });
-        }
-        if (finText) {
-          const fid = `yfin:financials:${yahooSymbol}`;
-          const s2 = sentimentScore([finText]);
-          insertNewsRow({ id: fid, symbol: yahooSymbol, date, title: 'Yahoo Financials Summary', summary: finText.slice(0, 960), url: 'https://finance.yahoo.com/', sentiment: s2 });
-          texts.push({ text: finText, metadata: { date: date.slice(0,10), source: 'yahoo_fin_financials', url: '' } });
-        }
-        if (texts.length) { try { await indexNamespace(yahooSymbol, { texts }); } catch {} }
-
-        // Store options metrics if options present
-        try {
-          const opt = (yfin as any)?.options || null;
-          const calls: Array<any> = Array.isArray(opt?.calls) ? opt.calls : [];
-          const puts: Array<any> = Array.isArray(opt?.puts) ? opt.puts : [];
-          const sum = (arr: Array<any>, key: string) => arr.reduce((a, r)=> a + (Number(r?.[key]) || 0), 0);
-          const callOi = sum(calls, 'Open Interest') || sum(calls, 'openInterest') || sum(calls, 'open_interest');
-          const putOi = sum(puts, 'Open Interest') || sum(puts, 'openInterest') || sum(puts, 'open_interest');
-          const callVol = sum(calls, 'Volume') || sum(calls, 'volume');
-          const putVol = sum(puts, 'Volume') || sum(puts, 'volume');
-          let pcr: number | null = null, pvr: number | null = null, bias: number | null = null;
-          if ((callOi + putOi) > 0) { pcr = putOi / Math.max(1, callOi); bias = (callOi - putOi) / (callOi + putOi); }
-          if ((callVol + putVol) > 0) { pvr = putVol / Math.max(1, callVol); }
-          const now = new Date().toISOString().slice(0,10);
-          try { const { upsertOptionsMetrics } = await import('../db.js'); (upsertOptionsMetrics as any)({ symbol: yahooSymbol, date: now, pcr, pvr, bias }); } catch {}
-        } catch {}
-      }
-    } catch {}
+    // Yahoo_fin KPIs and options removed
 
     // compute per-article sentiment and store
     for (const n of news) {
       const s = sentimentScore([`${n.title}. ${n.summary}`]);
-      insertNewsRow({ id: n.id, symbol: yahooSymbol, date: n.date, title: n.title, summary: n.summary, url: n.url, sentiment: s });
+      insertNewsRow({ id: n.id, symbol, date: n.date, title: n.title, summary: n.summary, url: n.url, sentiment: s });
     }
 
-    upsertStock(yahooSymbol, name || input);
+    upsertStock(symbol, name || input);
 
     // Index for RAG (both legacy TF-IDF and vector store)
-    try { indexDocs(yahooSymbol, news); } catch {}
+    try { indexDocs(symbol, news); } catch {}
     try {
       const texts: Array<{ text: string; metadata: Record<string, unknown> }> = [];
       for (const n of news) {
@@ -226,17 +122,17 @@ router.post('/ingest/:symbol', asyncHandler(async (req, res) => {
         texts.push({ text, metadata: { date: String((n as any).date || '').slice(0,10), source: 'news', url: (n as any).url || '' } });
       }
       try {
-        const row = db.prepare("SELECT id, date, title, summary FROM news WHERE symbol=? AND id LIKE 'mc:insights:%' ORDER BY date DESC LIMIT 1").get(yahooSymbol) as {id:string,date:string,title:string,summary:string}|undefined;
+        const row = db.prepare("SELECT id, date, title, summary FROM news WHERE symbol=? AND id LIKE 'mc:insights:%' ORDER BY date DESC LIMIT 1").get(symbol) as {id:string,date:string,title:string,summary:string}|undefined;
         if (row) {
           const t = `${row.title?.trim() || ''}. ${row.summary?.trim() || ''}`.trim();
           if (t) texts.push({ text: t, metadata: { date: String(row.date || '').slice(0,10), source: 'mc', url: '' } });
         }
       } catch {}
-      if (texts.length) { await indexNamespace(yahooSymbol, { texts }); }
+      if (texts.length) { await indexNamespace(symbol, { texts }); }
     } catch {}
 
-    logger.info({ symbol: yahooSymbol, insertedPrices: rows.length, insertedNews: news.length }, 'ingest_complete');
-    res.json({ ok:true, insertedPrices: rows.length, insertedNews: news.length, alphaSource: 'yahoo', priceSource: 'yahoo', newsSource: NA ? 'live' : 'sample', symbol: yahooSymbol, messages });
+    logger.info({ symbol, insertedPrices: rows.length, insertedNews: news.length }, 'ingest_complete');
+    res.json({ ok:true, insertedPrices: rows.length, insertedNews: news.length, priceSource: 'stooq', newsSource: NA ? 'live' : 'sample', symbol, messages });
   } catch (err: any) {
     const msg = String(err?.message || err || 'ingest_failed');
     const status = Number(err?.status || 500);
@@ -509,7 +405,13 @@ router.get('/stocks/:symbol/db', asyncHandler((req, res) => {
 // Expose stocklist names + symbols from server/stocklist.ts
 router.get('/stocks/list', asyncHandler((_req, res) => {
   const list = loadStocklist();
-  const data = list.map(e => ({ name: e.name, symbol: e.symbol, yahoo: `${e.symbol.toUpperCase()}.NS` }));
+  // Be defensive: some entries may be missing `symbol`
+  const data = list
+    .filter(e => !!(e.symbol && String(e.symbol).trim()))
+    .map(e => {
+      const sym = String(e.symbol || '').toUpperCase();
+      return { name: e.name || sym, symbol: sym, yahoo: `${sym}.NS` };
+    });
   res.json({ ok: true, data });
 }));
 
@@ -588,105 +490,4 @@ router.get('/top-picks/history', asyncHandler(async (req, res) => {
     : db.prepare(`SELECT snapshot_date, symbol, score, momentum, sentiment, mc_score, recommendation FROM top_picks_history WHERE snapshot_date>=? ORDER BY snapshot_date DESC`).all(cutoff);
   res.json({ ok:true, data: rows });
 }));
-// Yahoo ingest (historical daily via chart API)
-router.post('/yahoo/ingest/:symbol', asyncHandler(async (req, res) => {
-  const input = String(req.params.symbol || '').toUpperCase();
-  const symbol = resolveTicker(input, 'yahoo');
-  const range = String(req.query.range || '1y');
-  const interval = String(req.query.interval || '1d');
-  const chart = await fetchYahooDaily(symbol, range, interval);
-  const rows = parseYahooDaily(symbol, chart);
-  if (!rows.length) {
-    const err: any = new Error('No price data from Yahoo');
-    err.status = 502;
-    throw err;
-  }
-  rows.forEach(r => insertPriceRow(r));
-  upsertStock(symbol, symbol);
-  res.json({ ok:true, insertedPrices: rows.length, source: 'yahoo' });
-}));
-
-// Yahoo: fetch quote, chart, and quoteSummary modules in one call
-router.get('/stocks/:symbol/yahoo-full', asyncHandler(async (req, res) => {
-  const input = String(req.params.symbol || '').toUpperCase();
-  const symbol = resolveTicker(input, 'yahoo');
-  const range = String(req.query.range || '1y');
-  const interval = String(req.query.interval || '1d');
-  const modules = String(req.query.modules || 'price,summaryDetail,assetProfile,financialData,defaultKeyStatistics,earnings,recommendationTrend,balanceSheetHistory,cashflowStatementHistory,secFilings')
-                    .split(',').map(s=>s.trim()).filter(Boolean);
-  const [quote, chart, summary] = await Promise.all([
-    fetchYahooQuote(symbol).catch(()=>null),
-    fetchYahooDaily(symbol, range, interval).catch(()=>null),
-    fetchYahooQuoteSummary(symbol, modules).catch(()=>null)
-  ]);
-  try { upsertYahooCache({ symbol, range, interval, quote, summary, chart }); } catch {}
-  res.json({ ok: true, data: { symbol, quote, chart, summary } });
-}));
-
-// Yahoo via python yahoo_fin aggregator (best-effort). Requires python + yahoo_fin installed.
-router.get('/stocks/:symbol/yahoo-fin', asyncHandler(async (req, res) => {
-  const input = String(req.params.symbol || '').toUpperCase();
-  const symbol = resolveTicker(input, 'yahoo');
-  const period = String(req.query.period || '1y');
-  const interval = String(req.query.interval || '1d');
-
-  // Pick python executable (windows-friendly)
-  const candidates = ['python', 'python3', 'py'];
-  const args = ['server/scripts/yahoo_fin_fetch.py', symbol, '--period', period, '--interval', interval];
-
-  function runOnce(bin: string): Promise<{ code: number, stdout: string, stderr: string }> {
-    return new Promise((resolve) => {
-      const child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
-      let stdout = '';
-      let stderr = '';
-      child.stdout.on('data', (d) => { stdout += String(d); });
-      child.stderr.on('data', (d) => { stderr += String(d); });
-      child.on('close', (code) => resolve({ code: code ?? 0, stdout, stderr }));
-    });
-  }
-
-  // Try each candidate
-  let last: any = null;
-  for (const bin of candidates) {
-    // eslint-disable-next-line no-await-in-loop
-    const r = await runOnce(bin);
-    if (r && r.stdout) {
-      try {
-        const json = JSON.parse(r.stdout);
-        if (json && typeof json === 'object') {
-          return res.json(json);
-        }
-      } catch (e) {
-        last = { bin, error: String(e), stderr: r.stderr?.slice(0, 500) };
-        continue;
-      }
-    }
-    last = { bin, code: r.code, stderr: r.stderr?.slice(0, 500) };
-  }
-  return res.status(501).json({ ok: false, error: 'python_yahoo_fin_unavailable', detail: last });
-}));
-
-// Yahoo: read cached quote/summary/chart from DB (if available)
-router.get('/stocks/:symbol/yahoo-cache', asyncHandler(async (req, res) => {
-  const input = String(req.params.symbol || '').toUpperCase();
-  const symbol = resolveTicker(input, 'yahoo');
-  const range = req.query.range ? String(req.query.range) : '';
-  const interval = req.query.interval ? String(req.query.interval) : '';
-  const withData = String(req.query.withData ?? 'true').toLowerCase() !== 'false';
-  if (range && interval) {
-    const row = db.prepare(`SELECT symbol,range,interval,quote,summary,chart,fetched_at FROM yahoo_cache WHERE symbol=? AND range=? AND interval=?`).get(symbol, range, interval) as any;
-    if (!row) return res.status(404).json({ ok:false, error:'cache_not_found' });
-    if (withData) {
-      try {
-        row.quote = row.quote ? JSON.parse(String(row.quote)) : null;
-        row.summary = row.summary ? JSON.parse(String(row.summary)) : null;
-        row.chart = row.chart ? JSON.parse(String(row.chart)) : null;
-      } catch {}
-    } else {
-      delete row.quote; delete row.summary; delete row.chart;
-    }
-    return res.json({ ok:true, data: row });
-  }
-  const rows = db.prepare(`SELECT range,interval,fetched_at FROM yahoo_cache WHERE symbol=? ORDER BY fetched_at DESC`).all(symbol) as Array<any>;
-  return res.json({ ok:true, data: rows });
-}));
+// Yahoo-specific endpoints removed

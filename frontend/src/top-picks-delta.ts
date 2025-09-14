@@ -12,13 +12,30 @@ function ensureDeltaCard() {
     const card = document.createElement('div');
     card.className = 'card';
     card.id = 'topPicksDelta';
-    card.innerHTML = `<div class="muted">Top Picks Daily Changes</div><div id="tpDeltaBody" style="margin-top:6px">Loading…</div>`;
+    card.innerHTML = `
+      <div class="muted">Top Picks Daily Changes</div>
+      <div class="flex" style="gap:8px; margin-top:6px; align-items:center; flex-wrap:wrap">
+        <label class="muted">Mode:</label>
+        <select id="tpDeltaMode">
+          <option value="all" selected>All</option>
+          <option value="added">Added</option>
+          <option value="dropped">Dropped</option>
+          <option value="moved">Moved</option>
+        </select>
+        <label class="muted">Limit:</label>
+        <input id="tpDeltaLimit" type="number" min="1" step="1" value="10" style="width:80px" />
+        <label class="muted">Filter:</label>
+        <input id="tpDeltaSearch" placeholder="symbol…" style="width:140px" />
+        <button id="tpDeltaRefresh" class="btn-sm">Refresh</button>
+      </div>
+      <div id="tpDeltaBody" style="margin-top:6px">Loading…</div>`;
     container.appendChild(card);
   }
   return document.getElementById('tpDeltaBody');
 }
 
-function summarizeDelta(rows: Array<{snapshot_date:string,symbol:string,score:number}>) {
+type DeltaOpts = { mode: 'all'|'added'|'dropped'|'moved'; limit: number; search: string };
+function summarizeDelta(rows: Array<{snapshot_date:string,symbol:string,score:number}>, opts: DeltaOpts) {
   const byDate = new Map<string, Array<{symbol:string,score:number}>>();
   for (const r of rows) {
     const d = String(r.snapshot_date || '');
@@ -31,35 +48,53 @@ function summarizeDelta(rows: Array<{snapshot_date:string,symbol:string,score:nu
   const curr = byDate.get(dates[1])!.sort((a,b)=> b.score-a.score);
   const prevSet = new Map(prev.map((x,i)=> [x.symbol, { idx:i, score:x.score }]));
   const currSet = new Map(curr.map((x,i)=> [x.symbol, { idx:i, score:x.score }]));
-  const added = curr.filter(x=> !prevSet.has(x.symbol)).map(x=> x.symbol);
-  const dropped = prev.filter(x=> !currSet.has(x.symbol)).map(x=> x.symbol);
+  const search = (opts.search||'').trim().toUpperCase();
+  const limit = Math.max(1, Number(opts.limit||10));
+  const added = curr.filter(x=> !prevSet.has(x.symbol)).map(x=> x.symbol).filter(s=> !search || s.includes(search)).slice(0, limit);
+  const dropped = prev.filter(x=> !currSet.has(x.symbol)).map(x=> x.symbol).filter(s=> !search || s.includes(search)).slice(0, limit);
   const changed = curr.filter(x=> prevSet.has(x.symbol)).map(x=>{
     const p = prevSet.get(x.symbol)!; const deltaRank = p.idx - currSet.get(x.symbol)!.idx; const deltaScore = x.score - p.score; return { symbol:x.symbol, deltaRank, deltaScore };
-  }).filter(x=> x.deltaRank !== 0 || Math.abs(x.deltaScore) > 1e-6);
-  const topNow = curr.slice(0, 10).map(x=> x.symbol).join(', ');
-  const html = `
-    <div class="grid-2" style="gap:10px; font-size:12px">
-      <div><div class="muted">Today</div><div>${topNow || '-'}</div></div>
-      <div><div class="muted">Δ Count</div><div>+${added.length} / -${dropped.length}</div></div>
-    </div>
-    ${added.length ? `<div class="muted" style="margin-top:6px">New</div><div>${added.join(', ')}</div>` : ''}
-    ${dropped.length ? `<div class="muted" style="margin-top:6px">Dropped</div><div>${dropped.join(', ')}</div>` : ''}
-    ${changed.length ? `<div class="muted" style="margin-top:6px">Moved</div><div>${changed.map(c=> `${c.symbol} (rank ${c.deltaRank>0? '↑':'↓'}${Math.abs(c.deltaRank)}, score ${c.deltaScore>=0?'+':''}${c.deltaScore.toFixed(3)})`).join('; ')}</div>` : ''}
-    <div class="muted" style="font-size:11px; margin-top:6px">Source: /api/top-picks/history (last 2 days)</div>
-  `;
+  }).filter(x=> (x.deltaRank !== 0 || Math.abs(x.deltaScore) > 1e-6) && (!search || x.symbol.includes(search))).slice(0, limit);
+  const topNow = curr.filter(x=> !search || x.symbol.includes(search)).slice(0, limit).map(x=> x.symbol).join(', ');
+  const sections: string[] = [];
+  if (opts.mode === 'all') {
+    sections.push(`<div class="grid-2" style="gap:10px; font-size:12px"><div><div class="muted">Today</div><div>${topNow || '-'}</div></div><div><div class="muted">Δ Count</div><div>+${added.length} / -${dropped.length}</div></div></div>`);
+    if (added.length) sections.push(`<div class="muted" style="margin-top:6px">New</div><div>${added.join(', ')}</div>`);
+    if (dropped.length) sections.push(`<div class="muted" style="margin-top:6px">Dropped</div><div>${dropped.join(', ')}</div>`);
+    if (changed.length) sections.push(`<div class="muted" style="margin-top:6px">Moved</div><div>${changed.map(c=> `${c.symbol} (rank ${c.deltaRank>0? '↑':'↓'}${Math.abs(c.deltaRank)}, score ${c.deltaScore>=0?'+':''}${c.deltaScore.toFixed(3)})`).join('; ')}</div>`);
+  } else if (opts.mode === 'added') {
+    sections.push(`<div class="muted">New</div><div>${added.join(', ') || '-'}</div>`);
+  } else if (opts.mode === 'dropped') {
+    sections.push(`<div class="muted">Dropped</div><div>${dropped.join(', ') || '-'}</div>`);
+  } else if (opts.mode === 'moved') {
+    sections.push(`<div class="muted">Moved</div><div>${changed.map(c=> `${c.symbol} (rank ${c.deltaRank>0? '↑':'↓'}${Math.abs(c.deltaRank)}, score ${c.deltaScore>=0?'+':''}${c.deltaScore.toFixed(3)})`).join('; ') || '-'}</div>`);
+  }
+  const html = sections.join('') + `<div class="muted" style="font-size:11px; margin-top:6px">Source: /api/top-picks/history (last 2 days)</div>`;
   return { html };
 }
 
 async function renderTopPicksDelta() {
   const body = ensureDeltaCard();
   if (!body) return;
+  const modeSel = document.getElementById('tpDeltaMode') as HTMLSelectElement | null;
+  const limitEl = document.getElementById('tpDeltaLimit') as HTMLInputElement | null;
+  const searchEl = document.getElementById('tpDeltaSearch') as HTMLInputElement | null;
+  const mode = (modeSel?.value || 'all') as DeltaOpts['mode'];
+  const limN = limitEl ? Number(limitEl.value||10) : 10;
+  const limit = (Number.isFinite(limN) && limN>0) ? limN : 10;
+  const search = searchEl?.value || '';
   body.textContent = 'Loading…';
   const rows = await fetchHistory(2);
-  const { html } = summarizeDelta(rows);
+  const { html } = summarizeDelta(rows, { mode, limit, search });
   body.innerHTML = html;
 }
 
 window.addEventListener('DOMContentLoaded', () => {
   renderTopPicksDelta();
+  try {
+    document.getElementById('tpDeltaMode')?.addEventListener('change', renderTopPicksDelta);
+    document.getElementById('tpDeltaLimit')?.addEventListener('change', renderTopPicksDelta);
+    document.getElementById('tpDeltaSearch')?.addEventListener('input', () => setTimeout(renderTopPicksDelta, 50));
+    document.getElementById('tpDeltaRefresh')?.addEventListener('click', renderTopPicksDelta);
+  } catch {}
 });
-

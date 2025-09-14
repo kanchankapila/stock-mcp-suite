@@ -3,14 +3,21 @@ import express from 'express';
 import cors from 'cors';
 import { router as stockRoutes } from './routes/stocks.js';
 import { router as ragRoutes } from './routes/rag.js';
+import { router as featuresRoutes } from './routes/features.js';
+import { router as mlRoutes } from './routes/ml.js';
+import { router as backtestRoutes } from './routes/backtest.js';
+import { router as healthRoutes } from './routes/health.js';
+import { router as tlCacheRoutes } from './routes/tlCache.js';
+import { router as sourcesRoutes } from './routes/sources.js';
 import { ragHealth } from './rag/langchain.js';
 import { router as externalRoutes } from './routes/external.js';
 import { startTrendlyneCookieAutoRefresh } from './providers/trendlyneHeadless.js';
 import { attachMcp } from './mcp/mcp-server.js';
-import { attachLive } from './ws/live.js';
 import { logger } from './utils/logger.js';
-import { startYahooPrefetchFromStocklist } from './providers/prefetch.js';
+// Live WS and Yahoo prefetch removed (Yahoo provider deprecated)
 import { startRagAutoTasks } from './rag/auto.js';
+import { startBullJobs } from './jobs/bull.js';
+import { router as jobsRoutes } from './routes/jobs.js';
 
 const app = express();
 app.use(cors());
@@ -43,6 +50,13 @@ app.get('/health/rag', async (_req, res) => {
 app.use('/api', stockRoutes);
 app.use('/api/rag', ragRoutes);
 app.use('/api/external', externalRoutes);
+app.use('/api', featuresRoutes);
+app.use('/api', mlRoutes);
+app.use('/api', backtestRoutes);
+app.use('/api', healthRoutes);
+app.use('/api', jobsRoutes);
+app.use('/api', tlCacheRoutes);
+app.use('/api', sourcesRoutes);
 attachMcp(app);
 
 // Error handler (keep last)
@@ -92,8 +106,7 @@ async function startWithRetry(basePort: number) {
   for (let attempt = 0; attempt < Math.max(1, PORT_MAX_TRIES); attempt++) {
     try {
       const srv = await listenOnce(port);
-      // Attach WebSocket live quotes once server is listening
-      attachLive(srv);
+      // Live WebSocket disabled (Yahoo provider removed)
       return srv;
     } catch (err: any) {
       if (err?.code === 'EADDRINUSE') {
@@ -116,8 +129,16 @@ async function startWithRetry(basePort: number) {
 // Start server with auto-increment if configured
 startWithRetry(BASE_PORT);
 
-// Background prefetcher for NSE tickers from stocklist.ts via Yahoo
-startYahooPrefetchFromStocklist();
+// Background Yahoo prefetch removed
 
-// Trendlyne cookie auto-refresh scheduler
-startTrendlyneCookieAutoRefresh();
+// Trendlyne cookie auto-refresh scheduler (can be heavy; gate when prefetch disabled)
+if (String(process.env.PREFETCH_DISABLED || 'false').toLowerCase() !== 'true') {
+  startTrendlyneCookieAutoRefresh();
+} else {
+  logger.warn('trendlyne_cookie_refresh_disabled_env');
+}
+
+// Yahoo cookie auto-refresh removed (no longer used)
+
+// Start BullMQ jobs if enabled and available
+startBullJobs().then((s)=> logger.info({ s }, 'jobs_init')).catch(()=>{});

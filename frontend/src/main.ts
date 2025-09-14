@@ -1,9 +1,11 @@
-// Lightweight bootstrapping for the demo UI using vanilla TS + Vite.
+﻿// Lightweight bootstrapping for the demo UI using vanilla TS + Vite.
 // If you want a full Angular project, generate one with Angular CLI and port the components/services.
 
 import { Api } from './app/services/api.service';
 import { Chart, registerables } from 'chart.js';
 Chart.register(...registerables);
+import { emitSymbolChange } from './lib/events';
+import * as CardRegistry from './cards/registry';
 
 // Lightweight value labels + last-value annotation plugin for Chart.js
 const ValueLabelsPlugin = {
@@ -158,10 +160,27 @@ const THEME = {
 const root = document.getElementById('app')!;
 root.innerHTML = `
   <style>
+    /* Layout primitives to prevent overlap and keep content contained */
+    *, *::before, *::after { box-sizing: border-box; }
+    .container { display: flex; flex-direction: column; gap: 12px; }
+    .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; align-items: start; }
+    .card { position: relative; background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 12px; box-shadow: 0 2px 8px rgba(31,41,55,0.06); overflow: hidden; min-width: 0; }
+    .card > * { max-width: 100%; }
+    .card img, .card canvas, .card svg, .card table { max-width: 100%; }
+    .card pre { max-width: 100%; white-space: pre-wrap; overflow: auto; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; word-break: break-word; overflow-wrap: anywhere; }
+    .flex { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
     canvas.sparkline { height: 56px; }
     #mcHistChart, #historyChart { max-height: 220px; }
     #sentimentGauge { height: 90px; }
     #mcPvChart { max-height: 120px; }
+    .score-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:10px; align-items:stretch; width:100%; }
+    .score { border:1px solid var(--border); background: var(--panel-2); border-radius:12px; padding:10px; box-shadow: 0 2px 8px rgba(31,41,55,0.06); overflow:hidden; min-width:0; }
+    .score .label { font-size:12px; color: var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .score .value { font-size:24px; font-weight:700; display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; word-break:break-word; }
+    .score .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-weight:600; font-size:11px; }
     @media (max-width: 900px) {
       canvas.sparkline { height: 44px; }
       #mcHistChart, #historyChart { max-height: 180px !important; }
@@ -192,12 +211,18 @@ root.innerHTML = `
     .layout { display:flex; gap:14px; padding:12px; }
     aside.sidebar { width: 220px; min-width: 200px; border-right:1px solid var(--border); padding-right:12px; }
     aside .nav { display:flex; flex-direction:column; gap:6px; }
-    aside .nav a { padding:8px 10px; border-radius:8px; color: var(--text); text-decoration:none; border:1px solid transparent; }
+    aside .nav a { padding:8px 10px; border-radius:8px; color: var(--text); text-decoration:none; border:1px solid transparent; cursor:pointer; }
     aside .nav a.active, aside .nav a:hover { background: var(--surface); border-color: var(--border); }
     main.content { flex:1; min-width:0; }
     @media (max-width: 900px) { aside.sidebar { display:none; } .layout { padding:8px; } }
 
     /* Inline spinner for loading states */
+    table.data-grid { width:100%; border-collapse:collapse; }
+    table.data-grid th, table.data-grid td { padding:8px; border-bottom:1px solid var(--border); }
+    table.data-grid th { text-align:left; font-weight:600; color: var(--muted); user-select:none; cursor:pointer; }
+    table.data-grid th.sort-asc::after { content: ' ↑'; }
+    table.data-grid th.sort-desc::after { content: ' ↓'; }
+    canvas.spark-mini { height: 36px; }
     .spinner { width:16px; height:16px; border:2px solid var(--border); border-top-color: var(--color-primary); border-radius:50%; display:inline-block; animation: spin 1s linear infinite; vertical-align:middle; margin-right:8px; }
     @keyframes spin { to { transform: rotate(360deg); } }
   </style>
@@ -213,24 +238,27 @@ root.innerHTML = `
           <div class="tab" data-tf="M">Monthly</div>
           <div class="tab" data-tf="Y">Yearly</div>
         </div>
-        <button class="btn" id="sidebarToggle" title="Toggle Sidebar" aria-label="Toggle Sidebar">?</button>
-        <button class="btn" id="themeToggle" title="Toggle Theme" aria-label="Toggle Theme">?? Theme</button>
+        <button class="btn" id="sidebarToggle" title="Toggle Sidebar" aria-label="Toggle Sidebar">☰</button>
+        <button class="btn" id="themeToggle" title="Toggle Theme" aria-label="Toggle Theme">🌓 Theme</button>
       </div>
     </div>
   </header>
   <div class="layout">
     <aside class="sidebar">
       <div class="nav">
-        <a href="#/overview" class="active" data-view="dashboard" aria-label="Dashboard">?? Dashboard</a>
-        <a href="#" data-view="watchlist" aria-label="Watchlist">? Watchlist</a>
-        <a href="#" data-view="portfolio" aria-label="Portfolio">?? Portfolio</a>
-        <a href="#" data-view="alerts" aria-label="Alerts and Events">?? Alerts & Events</a>
-        <a href="#" data-view="settings" aria-label="Settings">?? Settings</a>
+        <a data-route="#/overview" class="active" aria-label="Dashboard">📊 Dashboard</a>
+        <a data-route="#/insight" aria-label="Stock Insight">📈 Stock Insight</a>
+        <a data-route="#/ai" aria-label="AI">🤖 AI</a>
+        <a data-route="#/watchlist" aria-label="Watchlist">⭐ Watchlist</a>
+        <a data-route="#/portfolio" aria-label="Portfolio">💼 Portfolio</a>
+        <a data-route="#/alerts" aria-label="Alerts and Events">🔔 Alerts</a>
+        <a data-route="#/settings" aria-label="Settings">⚙️ Settings</a>
+        <a data-route="#/health" aria-label="Provider Health">🩺 Health</a>
       </div>
     </aside>
     <main class="content">
   <div class="container">
-    <div class="card">
+    <div class="card" id="searchCard">
       <div class="flex">
         <input id="stockSearch" placeholder="Search stocks..." style="min-width:220px" />
         <select id="stockSelect" style="min-width:260px">
@@ -239,6 +267,7 @@ root.innerHTML = `
         <input id="symbol" placeholder="Enter stock symbol (e.g., AAPL)" list="stocksList" />
         <!-- Auto-fetches on selection; buttons removed -->
         <button id="dbstatsBtn">DB Data</button>
+        <button id="addToWatchlist" class="btn-sm" title="Add selected to Watchlist">+ Watchlist</button>
         
       </div>
       <datalist id="stocksList"></datalist>
@@ -304,6 +333,10 @@ root.innerHTML = `
       <div class="card" id="sentiment"><div class="muted">Sentiment & Recommendation</div></div>
       <div class="card" id="mcinsight"><div class="muted">MC Insight</div></div>
       <div class="card" id="mcquick"><div class="muted">MC Quick</div></div>
+      <div class="card" id="scoreCards">
+        <div class="muted">Quality Scores</div>
+        <div id="scoreCardsBody" style="margin-top:6px"></div>
+      </div>
       <div class="card" id="interactiveChart">
         <div class="muted">Interactive Candlestick</div>
         <div class="flex" style="gap:8px; margin-top:6px; flex-wrap:wrap">
@@ -358,14 +391,30 @@ root.innerHTML = `
             <option value="24" selected>24</option>
             <option value="48">48</option>
           </select>
-          <button id="tlCookieRefresh" class="btn-sm">Refresh Cookie</button>
+          <button id="tlCookieRefresh" class="btn-sm">Refresh</button>
           <div id="tlStatus" class="muted"></div>
         </div>
         <div id="tlBody" style="margin-top:6px"></div>
       </div>
-      <div class="card" id="trendlyneSma">
-        <div class="muted">Trendlyne SMA Chart</div>
-        <div id="tlSmaBody" style="margin-top:6px"></div>
+      <div class="card" id="tlOscValues">
+        <div class="muted">Oscillators – Values</div>
+        <canvas id="tlOscBars" style="max-height:220px; margin-top:6px"></canvas>
+      </div>
+      <div class="card" id="tlPivot">
+        <div class="muted">Pivot Levels vs Current Price</div>
+        <div id="tlPivotBody" style="margin-top:6px"></div>
+      </div>
+      <div class="card" id="tlOscDetails">
+        <div class="muted">Oscillator Details</div>
+        <div id="tlOscDetailsBody" style="margin-top:6px"></div>
+      </div>
+      <div class="card" id="tlCache">
+        <div class="muted">Trendlyne Cache (SMA/ADV)</div>
+        <div id="tlCacheBody" style="margin-top:6px"></div>
+      </div>
+      <div class="card" id="featuresStored">
+        <div class="muted">Stored Features</div>
+        <div id="fsBody" style="margin-top:6px"></div>
       </div>
       <div class="card" id="trendlyneDerivatives">
         <div class="muted">Trendlyne Derivatives</div>
@@ -602,27 +651,48 @@ const _ph = document.querySelector('#stockSelect option[disabled]') as HTMLOptio
       <a href="#/overview" class="btn" style="font-weight:700">Market Overview</a>
       <a href="#/insight" class="btn" style="font-weight:700">Stock Insight</a>
       <a href="#/ai" class="btn" style="font-weight:700">AI</a>
+      <a href="#/watchlist" class="btn" style="font-weight:700">Watchlist</a>
+      <a href="#/alerts" class="btn" style="font-weight:700">Alerts</a>
     </div>`;
   container.insertBefore(hero, bar.nextSibling);
 
   const tabs = Array.from(bar.querySelectorAll('.tab')) as HTMLElement[];
   const key = 'page';
-  function parseHash(): 'overview'|'insight'|'ai' {
+  function parseHash(): 'overview'|'insight'|'ai'|'watchlist'|'portfolio'|'alerts'|'settings'|'health' {
     const h = (location.hash || '').toLowerCase();
     if (h.startsWith('#/insight')) return 'insight';
     if (h.startsWith('#/ai')) return 'ai';
+    if (h.startsWith('#/watchlist')) return 'watchlist';
+    if (h.startsWith('#/portfolio')) return 'portfolio';
+    if (h.startsWith('#/alerts')) return 'alerts';
+    if (h.startsWith('#/settings')) return 'settings';
+    if (h.startsWith('#/health')) return 'health';
     return 'overview';
   }
   let current = parseHash();
 
-  function setPage(p: 'overview'|'insight'|'ai') {
+  function setPage(p: 'overview'|'insight'|'ai'|'watchlist'|'portfolio'|'alerts'|'settings'|'health') {
     current = p; try { localStorage.setItem(key, p); } catch {}
     tabs.forEach(t => t.classList.toggle('active', t.dataset.page === p));
-    const overviewIds = ['suggestions','marketOverview','topPicks'];
-    const insightIds = ['status','overview','history','news','yahooData','sentiment','mcinsight','mcquick','interactiveChart','mctech','mcPriceVolume','mcStockHistory','trendlyne','trendlyneSma','trendlyneDerivatives','providerResolution','alphaVantage'];
+    const overviewIds = ['suggestions','marketOverview','topPicks','topPicksDelta','topPicksHistory'];
+    const insightIds = ['status','overview','history','news','yahooData','sentiment','mcinsight','mcquick','interactiveChart','mctech','mcPriceVolume','mcStockHistory','trendlyne','tlOscValues','tlPivot','tlOscDetails','tlCache','featuresStored','trendlyneDerivatives','providerResolution','alphaVantage','yfinKpis','yfinProfile','yfinFinancials','liveQuote','mcVolumeCard','optionsSentimentCard','searchCard',
+      // Moved cards to Stock Insight page
+      'scoreCards','marketsMojo','yahooIngest'];
     const aiIds = ['ragExplain','ragStats','agent'];
-    const all = Array.from(new Set([...overviewIds, ...insightIds, ...aiIds]));
-    const show = p === 'overview' ? overviewIds : p === 'insight' ? insightIds : aiIds;
+    const watchlistIds: string[] = ['watchlistCard'];
+    const portfolioIds: string[] = ['portfolioCard'];
+    const alertsIds: string[] = ['alertsCard','topPicksDelta'];
+    const settingsIds: string[] = ['settingsCard'];
+    const healthIds: string[] = ['providerHealth'];
+    const all = Array.from(new Set([...overviewIds, ...insightIds, ...aiIds, ...watchlistIds, ...portfolioIds, ...alertsIds, ...settingsIds, ...healthIds]));
+    const show = p === 'overview' ? overviewIds
+      : p === 'insight' ? insightIds
+      : p === 'watchlist' ? watchlistIds
+      : p === 'portfolio' ? portfolioIds
+      : p === 'alerts' ? alertsIds
+      : p === 'settings' ? settingsIds
+      : p === 'health' ? healthIds
+      : aiIds;
     const hide = all.filter(id => !show.includes(id));
     hide.forEach(id => { const el = document.getElementById(id); if (el) (el as HTMLElement).style.display = 'none'; });
     show.forEach(id => { const el = document.getElementById(id); if (el) (el as HTMLElement).style.display = ''; });
@@ -630,16 +700,40 @@ const _ph = document.querySelector('#stockSelect option[disabled]') as HTMLOptio
     if (p === 'insight') {
       const sel = document.getElementById('stockSelect') as HTMLSelectElement | null;
       const symbol = sel?.value || '';
-      if (symbol) { try { renderYahooData(symbol); } catch {} }
+      if (symbol) {
+        try { renderYahooData(symbol); } catch {}
+        try { renderMcTech(symbol, currentPivotType, currentTechFreq); } catch {}
+        try { renderMcPriceVolume(symbol); } catch {}
+        try { renderMcStockHistory(symbol); } catch {}
+        try { renderTrendlyneAdvTech(symbol); } catch {}
+      }
     }
+    // Lazy render page-specific content
+    try {
+      if (p === 'watchlist') renderWatchlist();
+      if (p === 'portfolio') initPortfolioPage();
+      if (p === 'settings') initSettingsPage();
+    } catch {}
     // Sync hash
-    const want = p === 'overview' ? '#/overview' : p === 'insight' ? '#/insight' : '#/ai';
+    const want = p === 'overview' ? '#/overview' : p === 'insight' ? '#/insight' : p === 'ai' ? '#/ai' : p === 'watchlist' ? '#/watchlist' : p === 'portfolio' ? '#/portfolio' : p === 'alerts' ? '#/alerts' : p === 'settings' ? '#/settings' : '#/health';
     if (location.hash !== want) { location.hash = want; }
   }
 
   tabs.forEach(t => t.addEventListener('click', () => setPage((t.dataset.page as any)||'overview')));
   tabs.forEach(t => t.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); setPage((t.dataset.page as any)||'overview'); } }));
-  window.addEventListener('hashchange', () => { setPage(parseHash()); });
+  // Wire sidebar links
+  try {
+    const sideLinks = Array.from(document.querySelectorAll('aside.sidebar .nav a')) as HTMLAnchorElement[];
+    sideLinks.forEach(a => a.addEventListener('click', (ev) => { ev.preventDefault(); const r = a.getAttribute('data-route') || '#/overview'; location.hash = r; }));
+  } catch {}
+  window.addEventListener('hashchange', () => {
+    // update sidebar active state
+    try {
+      const sideLinks = Array.from(document.querySelectorAll('aside.sidebar .nav a')) as HTMLAnchorElement[];
+      sideLinks.forEach(a => a.classList.toggle('active', (a.getAttribute('data-route')||'') === location.hash));
+    } catch {}
+    setPage(parseHash());
+  });
   // Initial
   if (!location.hash) location.hash = current === 'overview' ? '#/overview' : current === 'insight' ? '#/insight' : '#/ai';
   setPage(current);
@@ -916,7 +1010,6 @@ function applyTimeframe(tf: 'D'|'M'|'Y') {
     try { renderYahooData(symbol); } catch {}
     try { rerenderOverviewAndHistory(symbol); } catch {}
     try { renderCandlestick(symbol); } catch {}
-    try { renderTrendlyneAdvTech(symbol); renderTrendlyneSma(symbol); } catch {}
   }
   try { updateRagExplainHint(); } catch {}
 }
@@ -1128,7 +1221,7 @@ renderMarketOverview().catch(()=>{});
     
     console.log('Stock dropdown populated with', data.length, 'options');
     
-    // Restore saved selection if available
+    // Restore saved selection if available, else auto-select first
     try {
       const saved = localStorage.getItem('selectedSymbol') || '';
       if (saved && data.some(d=>d.yahoo===saved)) {
@@ -1136,6 +1229,14 @@ renderMarketOverview().catch(()=>{});
         if (symbolInput) symbolInput.value = saved;
         // Trigger change so all cards (including Trendlyne) fetch immediately
         sel.dispatchEvent(new Event('change'));
+      } else {
+        // pick first non-empty option
+        const first = data[0]?.yahoo || '';
+        if (first) {
+          sel.value = first;
+          if (symbolInput) symbolInput.value = first;
+          sel.dispatchEvent(new Event('change'));
+        }
       }
     } catch {}
     // Change handler: persist + ingest + refresh + analyze
@@ -1314,10 +1415,12 @@ renderMarketOverview().catch(()=>{});
         } else {
           insightCard.innerHTML = `<div class="muted">MC Insight</div><div class="muted" style="margin-top:6px">No data</div>`;
         }
-      } catch (e: any) {
-        const insightCard = document.getElementById('mcinsight')!;
-        insightCard.innerHTML = `<div class="muted">MC Insight</div><div class="mono" style="margin-top:6px;color:#ff6b6b">${escapeHtml(e?.message || e)}</div>`;
-      }
+  } catch (e: any) {
+    const insightCard = document.getElementById('mcinsight')!;
+    const msg = String(e?.message || e);
+    const hint = /mcsymbol not found/i.test(msg) ? '<div class="muted" style="margin-top:6px">Mapping not found in stocklist. Update server/stocklist.ts for this symbol.</div>' : '';
+    insightCard.innerHTML = `<div class="muted">MC Insight</div><div class="mono" style="margin-top:6px;color:#ff6b6b">${escapeHtml(msg)}</div>${hint}`;
+  }
       try {
         const quick = await new Api().mcQuick(v);
         const quickCard = document.getElementById('mcquick')!;
@@ -1402,13 +1505,18 @@ renderMarketOverview().catch(()=>{});
         } else {
           quickCard.innerHTML = `<div class="muted">MC Quick</div><div class="muted" style="margin-top:6px">No data</div>`;
         }
-      } catch (e: any) {
-        const quickCard = document.getElementById('mcquick')!;
-        quickCard.innerHTML = `<div class="muted">MC Quick</div><div class="mono" style="margin-top:6px;color:#ff6b6b">${escapeHtml(e?.message || e)}</div>`;
-      }
+  } catch (e: any) {
+    const quickCard = document.getElementById('mcquick')!;
+    const msg = String(e?.message || e);
+    const hint = /mcsymbol not found/i.test(msg) ? '<div class="muted" style="margin-top:6px">Mapping not found in stocklist. Update server/stocklist.ts for this symbol.</div>' : '';
+    quickCard.innerHTML = `<div class="muted">MC Quick</div><div class="mono" style="margin-top:6px;color:#ff6b6b">${escapeHtml(msg)}</div>${hint}`;
+  }
 
-      // Fetch and render MC Technicals
-      renderMcTech(v, currentPivotType, currentTechFreq);
+      // Render Quality Scores (Durability / Valuation / Momentum)
+      try { renderQualityScores(); } catch {}
+
+  // Fetch and render MC Technicals
+  renderMcTech(v, currentPivotType, currentTechFreq);
 
       // Fetch and render MC Price Volume
       renderMcPriceVolume(v);
@@ -1416,13 +1524,19 @@ renderMarketOverview().catch(()=>{});
       // Fetch and render MC Stock History
       renderMcStockHistory(v);
 
-      // Fetch and render Trendlyne Advanced Tech
-      renderTrendlyneAdvTech(v);
-      // Fetch and render Trendlyne SMA (full chart)
-      renderTrendlyneSma(v);
+  // Trendlyne cards removed to improve performance
+  // Render TL Cache summary (SMA/ADV)
+  try { renderTlCache(v); } catch {}
+  // Render stored features charts
+  try { renderFeaturesStored(v); } catch {}
 
-      // Fetch and render MarketsMojo Valuation
+  // Render Quality Scores
+  try { renderQualityScores(); } catch {}
+
+  // Fetch and render MarketsMojo Valuation
       renderMarketsMojo();
+      // Trendlyne Advanced Tech (cached + fast)
+      try { renderTrendlyneAdvTech(v); } catch {}
       // Fetch and render Provider Resolution mapping
       renderProviderResolution(v);
       // Fetch and render Yahoo Data summary
@@ -1572,10 +1686,38 @@ async function renderMcPriceVolume(symbol: string) {
         });
       }
     } else {
-      pvCard.innerHTML = `<div class="muted">No price/volume data available.</div>`;
+      // Fallback: try Yahoo for basic volume spark
+      try {
+        const yf = await new Api().yahooFull(symbol, '1mo', '1d', 'price,summaryDetail');
+        const chart = yf?.data?.chart || {};
+        const ts: number[] = Array.isArray(chart?.timestamp) ? chart.timestamp : [];
+        const q = chart?.indicators?.quote?.[0] || {};
+        const vol: number[] = Array.isArray(q?.volume) ? q.volume : [];
+        if (ts.length && vol.length) {
+          pvCard.innerHTML = `
+            <div class="muted">Yahoo Volume (fallback)</div>
+            <canvas id="mcPvChart" style="max-height:120px; margin-top:6px"></canvas>
+            <div class="muted" style="font-size:11px; margin-top:6px">Source: Yahoo (fallback)</div>`;
+          const ctx = (document.getElementById('mcPvChart') as HTMLCanvasElement)?.getContext('2d');
+          if (ctx) {
+            const labels = ts.map(t=> new Date(t*1000).toLocaleDateString());
+            upsertChart('mcPvChart', ctx, { type:'bar', data:{ labels, datasets:[{ data: vol, backgroundColor: withAlpha(THEME.brand, 0.8), borderWidth: 0 }] }, options:{ plugins:{ legend:{ display:false } }, scales:{ x:{ grid:{ display:false } }, y:{ grid:{ color:'rgba(37,49,73,0.4)' }, ticks:{ display:false } } } } });
+          }
+        } else {
+          pvCard.innerHTML = `<div class="muted">No price/volume data available.</div>`;
+        }
+      } catch {
+        pvCard.innerHTML = `<div class="muted">No price/volume data available.</div>`;
+      }
     }
   } catch (e: any) {
-    pvCard.innerHTML = `<div class="mono" style="color:#ff6b6b">${escapeHtml(e?.message || e)}</div>`;
+    // If MC lookup fails (e.g., no mcsymbol), show a helpful hint
+    const msg = String(e?.message || e);
+    if (/mcsymbol not found/i.test(msg)) {
+      pvCard.innerHTML = `<div class="muted">Moneycontrol mapping not found for this symbol. Try another stock or update mapping in server/stocklist.ts.</div>`;
+    } else {
+      pvCard.innerHTML = `<div class="mono" style="color:#ff6b6b">${escapeHtml(msg)}</div>`;
+    }
   }
 }
 
@@ -1586,12 +1728,10 @@ async function renderMcPriceVolume(symbol: string) {
   if (btn) {
     btn.addEventListener('click', async ()=>{
       try {
-        if (status) status.textContent = 'Refreshing cookie�';
-        await new Api().tlCookieRefresh();
-        if (status) status.textContent = 'Cookie refreshed';
+        if (status) status.textContent = 'Refreshing Trendlyne data�';
         const sel = document.getElementById('stockSelect') as HTMLSelectElement | null;
         const symbol = sel?.value || '';
-        if (symbol) renderTrendlyneAdvTech(symbol);
+        if (symbol) { try { renderTrendlyneAdvTech(symbol); } catch {} if (status) status.textContent = 'Trendlyne refreshed'; } else { if (status) status.textContent = 'Select a stock first'; }
       } catch (e:any) {
         if (status) status.textContent = `Refresh failed: ${e?.message || e}`;
       }
@@ -1606,319 +1746,6 @@ async function renderMcPriceVolume(symbol: string) {
     });
   }
 })();
-
-async function renderMcStockHistory(symbol: string, resolution: '1D'|'1W'|'1M' = '1D') {
-  const histCard = document.getElementById('mcHistBody')!;
-  histCard.innerHTML = `<div class="muted">Loading...</div>`;
-  try {
-    const hist = await api.mcStockHistory(symbol, resolution);
-    if (hist && hist.data) {
-      const d = hist.data;
-      let labels: string[] = [];
-      let closes: number[] = [];
-      if (Array.isArray(d) && d.length > 0) {
-        labels = d.map((p:any) => p.date);
-        closes = d.map((p:any) => Number(p.close));
-      } else if (typeof d === 'object' && (d as any).t) {
-        const tv: any = d as any;
-        labels = tv.t.map((t:number) => new Date(t*1000).toLocaleDateString());
-        closes = (tv.c || []).map((v:number)=>Number(v));
-      }
-      if (labels.length && closes.length) {
-        histCard.innerHTML = `<canvas id="mcHistChart" style="margin-top:6px; max-height:220px"></canvas>
-        <div class="muted" style="font-size:11px; margin-top:6px">Source: /api/external/mc/stock-history?symbol=${escapeHtml(symbol)}&resolution=${escapeHtml(resolution)}</div>`;
-        const ctx = (document.getElementById('mcHistChart') as HTMLCanvasElement)?.getContext('2d');
-        if (ctx) {
-          const lineColor = THEME.brand;
-          const fillColor = withAlpha(THEME.brand, 0.15);
-          upsertChart('mcHistChart', ctx, {
-            type: 'line',
-            data: { labels, datasets: [{ label: 'MC Close', data: closes, borderColor: lineColor, backgroundColor: fillColor, borderWidth: 2, fill: true, tension: 0.2, pointRadius: 0 }] },
-            options: { plugins: { legend: { display: false } }, scales: { x: { display: true }, y: { display: true } } }
-          });
-        }
-      } else {
-        histCard.innerHTML = `<div class="muted">No history data available.</div>`;
-      }
-    } else {
-      histCard.innerHTML = `<div class="muted">No history data available.</div>`;
-    }
-  } catch (e: any) {
-    histCard.innerHTML = `<div class="mono" style="color:#ff6b6b">${escapeHtml(e?.message || e)}</div>`;
-  }
-}
-
-async function renderMcTech(symbol: string, pivotType = 'classic', freq: 'D'|'W'|'M' = 'D') {
-  const techCard = document.getElementById('mctechBody')!;
-  techCard.innerHTML = `<div class="muted">Loading technicals...</div>`;
-  try {
-    // Note: The API seems to use a different parameter for pivot types than the button names suggest.
-    // The backend route will need to handle mapping 'classic', 'fibo', etc. to what the MC API expects.
-    // For now, we'll just pass the frequency. The pivot buttons are illustrative.
-    const tech = await api.mcTech(symbol, freq);
-    if (tech && tech.data) {
-      const d = tech.data;
-      const sentimentColor = d.sentiments?.indication === 'Bullish' ? 'var(--success)' : d.sentiments?.indication === 'Bearish' ? 'var(--danger)' : 'var(--muted)';
-      
-      const indicatorsHtml = (d.indicators || []).map(i => `<tr><td>${escapeHtml(i.displayName)}</td><td>${escapeHtml(i.value)}</td><td style="color:${i.indication === 'Bullish' ? 'var(--success)' : i.indication === 'Bearish' ? 'var(--danger)' : 'var(--muted)'}">${escapeHtml(i.indication || '')}</td></tr>`).join('');
-      const smaHtml = (d.sma || []).map(s => `<tr><td>SMA ${escapeHtml(s.key)}</td><td>${escapeHtml(s.value)}</td><td style="color:${s.indication === 'Bullish' ? 'var(--success)' : s.indication === 'Bearish' ? 'var(--danger)' : 'var(--muted)'}">${escapeHtml(s.indication || '')}</td></tr>`).join('');
-      const emaHtml = (d.ema || []).map(e => `<tr><td>EMA ${escapeHtml(e.key)}</td><td>${escapeHtml(e.value)}</td><td style="color:${e.indication === 'Bullish' ? 'var(--success)' : e.indication === 'Bearish' ? 'var(--danger)' : 'var(--muted)'}">${escapeHtml(e.indication || '')}</td></tr>`).join('');
-
-      techCard.innerHTML = `
-        <div class="grid-2" style="gap:8px; align-items:center">
-          <div>
-            <div style="font-weight:600; color: ${sentimentColor}; margin-bottom: 6px;">Sentiment: ${escapeHtml(d.sentiments?.indication || 'N/A')}</div>
-            <canvas id="mcTechPie" width="140" height="140"></canvas>
-            <div class="muted" style="font-size:12px; text-align:center; margin-top:4px;">
-              ${d.sentiments?.totalBullish} Bullish � ${d.sentiments?.totalNeutral} Neutral � ${d.sentiments?.totalBearish} Bearish
-            </div>
-          </div>
-          <div>
-            <div class="muted">Indicators</div>
-            <table style="width:100%; font-size: 12px; margin-top:4px">
-              <thead><tr><th>Indicator</th><th>Value</th><th>Trend</th></tr></thead>
-              <tbody>
-                ${indicatorsHtml}
-              </tbody>
-            </table>
-            <div class="grid-2" style="gap:10px; margin-top:10px">
-              <div>
-                <div class="muted">SMA</div>
-                <table style="width:100%; font-size:12px; margin-top:4px"><thead><tr><th>Key</th><th>Value</th><th>Trend</th></tr></thead><tbody>${smaHtml}</tbody></table>
-              </div>
-              <div>
-                <div class="muted">EMA</div>
-                <table style="width:100%; font-size:12px; margin-top:4px"><thead><tr><th>Key</th><th>Value</th><th>Trend</th></tr></thead><tbody>${emaHtml}</tbody></table>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div class="muted" style="font-size:11px; margin-top:6px">Source: /api/stocks/${escapeHtml(symbol)}/mc-tech?freq=${escapeHtml(freq)}</div>
-      `;
-      const pie = (document.getElementById('mcTechPie') as HTMLCanvasElement)?.getContext('2d');
-      if (pie) {
-        const bull = Number(d.sentiments?.totalBullish || 0);
-        const neu = Number(d.sentiments?.totalNeutral || 0);
-        const bear = Number(d.sentiments?.totalBearish || 0);
-        upsertChart('mcTechPie', pie, {
-          type: 'doughnut',
-          data: { labels: ['Bullish','Neutral','Bearish'], datasets: [{ data: [bull, neu, bear], backgroundColor: [THEME.success,'#f1c40f', THEME.danger], borderWidth: 0 }] },
-          options: { plugins: { legend: { display: false } }, cutout: '55%'}
-        });
-      }
-
-      // Post-process: style indication cells as pills
-      try {
-        const bodies = Array.from(techCard.querySelectorAll('table tbody')) as HTMLTableSectionElement[];
-        for (const tb of bodies) {
-          const rows = Array.from(tb.querySelectorAll('tr'));
-          for (const tr of rows) {
-            const cells = tr.querySelectorAll('td');
-            if (cells.length >= 3) {
-              const cell = cells[2] as HTMLTableCellElement;
-              const ind = (cell.textContent || '').trim();
-              const color = ind === 'Bullish' ? 'var(--success)' : ind === 'Bearish' ? 'var(--danger)' : 'var(--muted)';
-              const arrow = ind === 'Bullish' ? '?' : ind === 'Bearish' ? '?' : '?';
-              cell.innerHTML = `<span style="margin-right:6px; color:${color}">${arrow}</span>` +
-                `<span style="display:inline-block; padding:2px 6px; border-radius:999px; background:${withAlpha(color,0.15)}; color:${color}; font-weight:600; font-size:11px">${escapeHtml(ind || '-') }</span>`;
-            }
-          }
-        }
-        // Wrap indicator/SMA/EMA tables with KPI cards if not already
-        const tables = Array.from(techCard.querySelectorAll('table')) as HTMLTableElement[];
-        for (const t of tables) {
-          const parent = t.parentElement as HTMLElement | null;
-          if (parent && parent.classList.contains('kpi')) continue;
-          const wrap = document.createElement('div');
-          wrap.className = 'kpi';
-          t.replaceWith(wrap);
-          wrap.appendChild(t);
-        }
-      } catch {}
-
-      // Append OHLC and Pivot Levels for better organization
-      try {
-        const leftCol = (techCard.querySelector('#mctechBody canvas#mcTechPie') as HTMLCanvasElement)?.parentElement as HTMLElement | undefined;
-        if (leftCol) {
-          const ohlcHtml = `
-            <div class="section-title">Price (OHLC)</div>
-            <div class="grid-3" style="gap:8px; font-size:12px; margin-top:8px">
-              <div><div class="muted">Open</div><div>${escapeHtml(String(d.open ?? ''))}</div></div>
-              <div><div class="muted">High</div><div>${escapeHtml(String(d.high ?? ''))}</div></div>
-              <div><div class="muted">Low</div><div>${escapeHtml(String(d.low ?? ''))}</div></div>
-            </div>
-            <div class="grid-2" style="gap:8px; font-size:12px; margin-top:6px">
-              <div><div class="muted">Close</div><div>${escapeHtml(String(d.close ?? ''))}</div></div>
-              <div><div class="muted">Volume</div><div>${escapeHtml(String(d.volume ?? ''))}</div></div>
-            </div>`;
-          leftCol.insertAdjacentHTML('beforeend', ohlcHtml);
-
-          const piv = (Array.isArray(d.pivotLevels) ? d.pivotLevels : []).find((p:any)=> String(p.key||'').toLowerCase().includes(pivotType.toLowerCase())) || (d.pivotLevels||[])[0];
-          if (piv && piv.pivotLevel) {
-            const pp: any = piv.pivotLevel;
-            const px = Number(d.close ?? NaN);
-            const levelCell = (name: string, val: any) => {
-              const num = Number(val);
-              let hi = '';
-              if (Number.isFinite(num) && Number.isFinite(px)) {
-                const levels = ['pivotPoint','r1','r2','r3','s1','s2','s3'];
-                const minDiff = Math.min(...levels.map(k=>{const n=Number(pp[k]);return Number.isFinite(n)?Math.abs(px-n):Infinity;}));
-                if (Math.abs(px - num) === minDiff) hi = `background:${withAlpha(THEME.brand,0.15)}; font-weight:600;`;
-              }
-              return `<td style="${hi}">${escapeHtml(name)}</td><td style="${hi}">${escapeHtml(String(val ?? ''))}</td>`;
-            };
-            const pivHtml = `
-              <div class="section-title" style="margin-top:8px">Pivot Levels (${escapeHtml(String(piv.key||'Classic'))})</div>
-              <div class="kpi" style="margin-top:4px">
-              <table style="width:100%; font-size:12px;">
-                <tbody>
-                  <tr>${levelCell('Pivot', pp.pivotPoint)}${levelCell('R1', pp.r1)}</tr>
-                  <tr>${levelCell('R2', pp.r2)}${levelCell('R3', pp.r3)}</tr>
-                  <tr>${levelCell('S1', pp.s1)}${levelCell('S2', pp.s2)}</tr>
-                  <tr>${levelCell('S3', pp.s3)}<td></td></tr>
-                </tbody>
-              </table></div>`;
-            leftCol.insertAdjacentHTML('beforeend', pivHtml);
-            // Compare to Pivots gauge
-            const vals = ['s3','s2','s1','pivotPoint','r1','r2','r3'].map(k=>Number(pp[k])).filter(n=>Number.isFinite(n));
-            if (vals.length >= 2 && Number.isFinite(px)) {
-              const minV = Math.min(...vals);
-              const maxV = Math.max(...vals);
-              const pos = Math.max(0, Math.min(1, (px - minV) / (maxV - minV || 1)));
-              const gauge = `
-                <div class="section-title" style="margin-top:8px">Compare to Pivots</div>
-                <div class="kpi" style="padding:10px">
-                  <div style="position:relative; height:8px; background:${withAlpha(THEME.muted,0.2)}; border-radius:6px">
-                    <div style="position:absolute; left:0; top:0; height:8px; width:${(pos*100).toFixed(1)}%; background:${THEME.brand}; border-radius:6px"></div>
-                  </div>
-                  <div class="muted" style="font-size:11px; display:flex; justify-content:space-between; margin-top:4px">
-                    <span>${minV.toFixed(2)}</span>
-                    <span>Close ${px.toFixed(2)}</span>
-                    <span>${maxV.toFixed(2)}</span>
-                  </div>
-                </div>`;
-              leftCol.insertAdjacentHTML('beforeend', gauge);
-            }
-          }
-        }
-      } catch {}
-    } else {
-      techCard.innerHTML = `<div class="muted">No technical data available.</div>`;
-    }
-  } catch (e: any) {
-    techCard.innerHTML = `<div class="mono" style="color:#ff6b6b">${escapeHtml(e?.message || e)}</div>`;
-  }
-}
-
-// Define the type for the market overview data
-interface MarketOverviewItem {
-  indexName: string;
-  advances: number;
-  declines: number;
-  currentIndexValue: number;
-  highIndexValue: number;
-  lowIndexValue: number;
-  fiftyTwoWeekHighIndexValue: number;
-  fiftyTwoWeekLowIndexValue: number;
-  netChange: number;
-  perChange: number;
-}
-
-async function fetchMarketOverview(): Promise<MarketOverviewItem[]> {
-  console.log('Fetching market overview data from ET APIs...');
-  try {
-    const response = await fetch(
-      'https://etmarketsapis.indiatimes.com/ET_Stats/getAllIndices?exchange=nse&sortby=value&sortorder=desc&pagesize=100'
-    );
-    const data = await response.json();
-
-    if (!data || !data.searchresult) {
-      throw new Error('Invalid response structure');
-    }
-
-    return data.searchresult.map((item: any) => ({
-      indexName: item.indexName,
-      advances: item.advances,
-      declines: item.declines,
-      currentIndexValue: item.currentIndexValue,
-      highIndexValue: item.highIndexValue,
-      lowIndexValue: item.lowIndexValue,
-      fiftyTwoWeekHighIndexValue: item.fiftyTwoWeekHighIndexValue,
-      fiftyTwoWeekLowIndexValue: item.fiftyTwoWeekLowIndexValue,
-      netChange: item.netChange,
-      perChange: item.perChange,
-    }));
-  } catch (error) {
-    console.error('Error fetching market overview data:', error);
-    return [];
-  }
-}
-
-async function renderMarketOverview() {
-  const overviewCard = document.getElementById('marketOverview');
-  if (!overviewCard) return;
-
-  try {
-    const data = await fetchMarketOverview();
-    // Sort data by percentage change (high to low)
-    data.sort((a, b) => b.perChange - a.perChange);
-
-    overviewCard.style.display = 'grid';
-    overviewCard.style.gridTemplateColumns = 'repeat(auto-fit, minmax(240px, 1fr))';
-    overviewCard.style.gap = '12px';
-
-    overviewCard.innerHTML = data
-      .map(
-        (item) => {
-          const isPositive = item.netChange >= 0;
-          const changeColor = isPositive ? 'var(--success)' : 'var(--danger)';
-
-          return `
-          <div class="flip-card" style="height: 160px;" onclick="console.log('Card for ${item.indexName} clicked')">
-            <div class="flip-card-inner">
-              <div class="flip-card-front" style="border-left: 4px solid ${changeColor}; display: flex; flex-direction: column; justify-content: center; align-items: center;">
-                <h3 style="font-size: 16px; font-weight: 600; color: #333; margin: 0 0 10px 0;">${item.indexName}</h3>
-                <div style="font-size: 14px; font-weight: 700; color: ${changeColor};">
-                  ${isPositive ? '?' : '?'} ${item.netChange.toFixed(2)} (${item.perChange.toFixed(2)}%)
-                </div>
-                <div style="font-size: 14px; color: #555; margin-top: 10px;">
-                  <strong>Current:</strong> ${item.currentIndexValue.toFixed(2)}
-                </div>
-              </div>
-              <div class="flip-card-back">
-                <h4 style="font-size: 14px; font-weight: 600; color: #333; margin: 0 0 10px 0;">${item.indexName} Details</h4>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; font-size: 12px; color: #555; text-align: left;">
-                  <div><strong>Advances:</strong> <span style="color: #28a745;">${item.advances}</span></div>
-                  <div><strong>Declines:</strong> <span style="color: #dc3545;">${item.declines}</span></div>
-                  <div><strong>High:</strong> ${item.highIndexValue.toFixed(2)}</div>
-                  <div><strong>Low:</strong> ${item.lowIndexValue.toFixed(2)}</div>
-                  <div><strong>52W H:</strong> ${item.fiftyTwoWeekHighIndexValue.toFixed(2)}</div>
-                  <div><strong>52W L:</strong> ${item.fiftyTwoWeekLowIndexValue.toFixed(2)}</div>
-                </div>
-              </div>
-            </div>
-          </div>
-        `;
-        }
-      )
-      .join('');
-  } catch (error) {
-    console.error('Error rendering market overview:', error);
-    overviewCard.innerHTML = '<p style="color: #dc3545;">Error loading market overview. Please try again later.</p>';
-  }
-}
-
-// Refresh market overview every 5 seconds
-setInterval(renderMarketOverview, 5000);
-
-// Wire up MC history resolution change
-const mcHistResSelect = document.getElementById('mcHistResolution') as HTMLSelectElement;
-mcHistResSelect.addEventListener('change', () => {
-  const symbol = (document.getElementById('stockSelect') as HTMLSelectElement).value;
-  if (symbol) {
-    renderMcStockHistory(symbol, mcHistResSelect.value as '1D'|'1W'|'1M');
-  }
-});
 
 function escapeHtml(str: string): string {
   const div = document.createElement('div');
@@ -2039,6 +1866,164 @@ async function renderTrendlyneAdvTech(symbol: string) {
     const sma = data.sma || null;
     const normalized = (data as any).normalized || null;
 
+    // Compact, decongested render using normalized summary (fast path)
+    try {
+      const score = (adv as any)?.score ?? (normalized as any)?.score ?? '-';
+      const signal = (adv as any)?.signal ?? (adv as any)?.trend ?? (normalized as any)?.signal ?? '-';
+      const sum = (adv as any)?.summary || (normalized as any)?.summary || {};
+      const buy = Number(sum.buy ?? 0), neutral = Number(sum.neutral ?? 0), sell = Number(sum.sell ?? 0);
+      const total = Math.max(1, buy + neutral + sell);
+      const buyPct = Math.round((buy/total)*100), neutPct = Math.round((neutral/total)*100), sellPct = Math.round((sell/total)*100);
+      const tb: string[] = (normalized as any)?.topBullish || [];
+      const tr: string[] = (normalized as any)?.topBearish || [];
+      const decision = (normalized as any)?.decision || '';
+      const decColor = /bull/i.test(decision) ? THEME.success : /bear/i.test(decision) ? THEME.danger : THEME.muted;
+
+      const chips = `
+        <span class="chip" style="background:${withAlpha(THEME.brand,0.15)}; color:${THEME.brand}">Score: ${escapeHtml(String(score))}</span>
+        <span class="chip" style="background:${withAlpha('#64748b',0.18)}; color:#64748b">Signal: ${escapeHtml(String(signal))}</span>
+        <span class="chip" style="background:${withAlpha(decColor,0.15)}; color:${decColor}">${escapeHtml(decision || 'Neutral')}</span>`;
+
+      const summary = `
+        <div class="grid-3" style="gap:8px; margin-top:6px">
+          <div class="kpi"><div class="muted">Buy</div><div class="stat-sm" style="color:${THEME.success}">${buy} (${buyPct}%)</div></div>
+          <div class="kpi"><div class="muted">Neutral</div><div class="stat-sm">${neutral} (${neutPct}%)</div></div>
+          <div class="kpi"><div class="muted">Sell</div><div class="stat-sm" style="color:${THEME.danger}">${sell} (${sellPct}%)</div></div>
+        </div>`;
+      // Strip fallback oscillator/pivot canvases; rely on separate cards
+      try {
+        const oc = document.getElementById('tlOscBars');
+        if (oc && oc.parentElement) oc.parentElement.remove();
+        const pc = document.getElementById('tlPivotBars');
+        if (pc && pc.parentElement) pc.parentElement.remove();
+      } catch {}
+
+      const lists = `
+        <div class="grid-2" style="gap:8px; margin-top:8px">
+          <div class="kpi"><div class="section-title" style="margin-top:0">Top Bullish</div>
+            <div style="display:flex; gap:6px; flex-wrap:wrap">${tb.slice(0,5).map((x:string)=>`<span class="chip" style="background:${withAlpha(THEME.success,0.15)}; color:${THEME.success}">${escapeHtml(x)}</span>`).join(' ') || '<span class="muted">None</span>'}
+            </div></div>
+          <div class="kpi"><div class="section-title" style="margin-top:0">Top Bearish</div>
+            <div style="display:flex; gap:6px; flex-wrap:wrap">${tr.slice(0,5).map((x:string)=>`<span class="chip" style="background:${withAlpha(THEME.danger,0.15)}; color:${THEME.danger}">${escapeHtml(x)}</span>`).join(' ') || '<span class="muted">None</span>'}
+            </div></div>
+        </div>`;
+
+      // Pull richer parameters (if present) for concise sections
+      const body = (adv && (adv as any).body) || (adv as any) || {};
+      const params: any = (body as any).parameters || {};
+      const maSig = params.ma_signal || {};
+      const oscSig = params.oscillator_signal || (body as any).oscillator_signal || {};
+      const piv = params.pivot_level || {};
+      const rsi = params.rsi || (body as any).rsi || null;
+      const macd = params.macd || (body as any).macd || null;
+      const momentum = params.momentum || (body as any).momentum || null;
+      const priceAnalysis: any[] = Array.isArray(params.price_analysis) ? params.price_analysis : [];
+      const betaAnalysis: any[] = Array.isArray(params.beta_analysis) ? params.beta_analysis : [];
+      const vol = params.volume_analysis || {};
+      const cndl = (params.candlesticks_active || {}) as any;
+      const bullC = Array.isArray(cndl.bullish_candlestick) ? cndl.bullish_candlestick.map((c:any)=> String(c?.name||'')).filter(Boolean) : [];
+      const bearC = Array.isArray(cndl.bearish_candlestick) ? cndl.bearish_candlestick.map((c:any)=> String(c?.name||'')).filter(Boolean) : [];
+
+      // Render Pivot Levels into separate card
+      const pv = (piv && (typeof piv === 'object')) ? piv : {};
+      const pvItem = (k: string, label: string) => {
+        const v = (pv as any)[k]?.value ?? (pv as any)[k] ?? '';
+        return `<div class="kpi"><div class="muted">${label}</div><div class="stat-sm">${escapeHtml(String(v))}</div></div>`;
+      };
+      const pivHtml = `
+        <div class="grid-3" style="gap:8px; margin-top:6px">
+          ${pvItem('S3','S3')}${pvItem('S2','S2')}${pvItem('S1','S1')}
+          ${pvItem('pivot_point','Pivot')}${pvItem('R1','R1')}${pvItem('R2','R2')}
+          ${pvItem('R3','R3')}
+        </div>`;
+      try { const pvEl = document.getElementById('tlPivotBody'); if (pvEl) pvEl.innerHTML = pivHtml; } catch {}
+
+      // Render Oscillator Details into separate card (with candlesticks)
+      const oscList: any[] = Array.isArray(params.oscillator_parameter) ? params.oscillator_parameter : (Array.isArray((body as any).oscillator_parameter) ? (body as any).oscillator_parameter : []);
+      const oscRows = oscList.slice(0, 12).map((o:any) => {
+        const name = String(o?.name || '');
+        const val = Number(o?.value);
+        const col = /positive/i.test(String(o?.color||'')) ? THEME.success : /negative/i.test(String(o?.color||'')) ? THEME.danger : THEME.muted;
+        const desc = String(o?.insight?.shorttext || o?.description || '');
+        return `<div class=\"kpi\"><div class=\"muted\">${escapeHtml(name)}</div><div class=\"stat-sm\" style=\"color:${col}\">${Number.isFinite(val)? val.toFixed(2): '-'}</div>${desc?`<div class=\\\"muted\\\" style=\\\"font-size:11px\\\">${escapeHtml(desc)}</div>`:''}</div>`;
+      }).join('');
+      const cndlHtml = `
+        <div class="kpi" style="margin-top:8px"><div class="section-title" style="margin-top:0">Candlestick Patterns</div>
+          <div class="grid-2" style="gap:8px">
+            <div><div class="muted">Bullish</div><div style="display:flex; gap:6px; flex-wrap:wrap">${bullC.slice(0,6).map(n=>`<span class="chip" style="background:${withAlpha(THEME.success,0.15)}; color:${THEME.success}">${escapeHtml(n)}</span>`).join(' ') || '<span class="muted">None</span>'}</div></div>
+            <div><div class="muted">Bearish</div><div style="display:flex; gap:6px; flex-wrap:wrap">${bearC.slice(0,6).map(n=>`<span class="chip" style="background:${withAlpha(THEME.danger,0.15)}; color:${THEME.danger}">${escapeHtml(n)}</span>`).join(' ') || '<span class="muted">None</span>'}</div></div>
+          </div>
+        </div>`;
+      try { const detEl = document.getElementById('tlOscDetailsBody'); if (detEl) detEl.innerHTML = (oscRows ? `<div class=\"grid-3\" style=\"gap:8px\">${oscRows}</div>` : '<div class=\"muted\">No oscillator details</div>') + cndlHtml; } catch {}
+
+      // Render Oscillator Values bar chart into separate card
+      try {
+        const labels = oscList.map((o:any)=> String(o?.name||''));
+        const values = oscList.map((o:any)=> Number(o?.value??0));
+        const ctx = (document.getElementById('tlOscBars') as HTMLCanvasElement)?.getContext('2d');
+        if (ctx && labels.length) {
+          upsertChart('tlOscBars', ctx, {
+            type:'bar', data:{ labels, datasets:[{ label:'Value', data: values, backgroundColor: THEME.brand, borderWidth:0 }] }, options:{ indexAxis:'y',
+              plugins:{ legend:{ display:false }, tooltip:{ enabled:true } }, scales:{ x:{ beginAtZero:true }, y:{ ticks:{ autoSkip:false, font:{ size:10 } } } } }
+          });
+        }
+      } catch {}
+
+      // MA/OSC summary chips
+      const maChips = `
+        <span class="chip" style="background:${withAlpha(THEME.success,0.15)}; color:${THEME.success}">SMA: ${Number(maSig.sma_bullish||0)} / ${Number(maSig.sma_total||0)}</span>
+        <span class="chip" style="background:${withAlpha(THEME.info,0.15)}; color:${THEME.info}">EMA: ${Number(maSig.ema_bullish||0)} / ${Number(maSig.ema_total||0)}</span>
+        <span class="chip" style="background:${withAlpha(THEME.brand,0.12)}; color:${THEME.brand}">OSC: ${Number(oscSig.bullish||0)} buy / ${Number(oscSig.bearish||0)} sell</span>`;
+
+      
+
+      // Key indicators mini-cards
+      const keyInd = `
+        <div class="grid-3" style="gap:8px; margin-top:6px">
+          <div class="kpi"><div class="muted">RSI</div><div class="stat-sm">${escapeHtml(String(rsi?.value ?? '-'))}</div><div class="muted" style="font-size:11px">${escapeHtml(String(rsi?.insight?.shorttext || ''))}</div></div>
+          <div class="kpi"><div class="muted">MACD</div><div class="stat-sm">${escapeHtml(String(macd?.value ?? '-'))}</div><div class="muted" style="font-size:11px">${escapeHtml(String(macd?.insight?.shorttext || ''))}</div></div>
+          <div class="kpi"><div class="muted">Momentum</div><div class="stat-sm">${escapeHtml(String(momentum?.value ?? '-'))}</div><div class="muted" style="font-size:11px">${escapeHtml(String(momentum?.insight?.shorttext || ''))}</div></div>
+        </div>`;
+
+      // Price analysis quick chips (show 1D, 1W, 1M if present)
+      const pick = (name: string) => priceAnalysis.find(pa => String(pa?.name||'').toLowerCase().includes(name));
+      const pa1d = pick('1 day'); const pa1w = pick('1 week'); const pa1m = pick('1 month');
+      function paChip(pa:any) {
+        if (!pa) return '';
+        const n = Number(pa.changePercentSafe ?? pa.changePercent ?? pa.change ?? 0);
+        const col = n>=0 ? THEME.success : THEME.danger;
+        const sign = n>=0 ? '+' : '';
+        return `<span class="chip" style="background:${withAlpha(col,0.15)}; color:${col}">${escapeHtml(pa.name)}: ${sign}${n.toFixed(2)}%</span>`;
+      }
+      const paChips = [pa1d, pa1w, pa1m].map(paChip).filter(Boolean).join(' ');
+
+      // Beta quick chips (1M, 1Y)
+      const beta1m = betaAnalysis.find(b => /1\s*month/i.test(String(b?.label||'')));
+      const beta1y = betaAnalysis.find(b => /1\s*year/i.test(String(b?.label||'')));
+      function betaChip(b:any) { if (!b) return ''; const v = Number(b.data); const col = /positive/i.test(String(b.color||'')) ? THEME.success : /negative/i.test(String(b.color||'')) ? THEME.danger : THEME.muted; return `<span class="chip" style="background:${withAlpha(col,0.15)}; color:${col}">${escapeHtml(String(b.label))}: ${Number.isFinite(v)? v.toFixed(2): '-'}</span>`; }
+      const betaChips = [beta1m, beta1y].map(betaChip).filter(Boolean).join(' ');
+
+      
+
+      const src = `/api/external/trendlyne/adv-tech?symbol=${encodeURIComponent(base)}&lookback=${encodeURIComponent(String(lookback))}`;
+      el.innerHTML = `
+        <div class="muted">TLID: ${escapeHtml(String(tlid || 'N/A'))} • Lookback: ${escapeHtml(String(lookback))} • <a href="${src}" target="_blank">source</a></div>
+        <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px">${chips}</div>
+        ${summary}
+        <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px">${maChips}</div>
+        ${keyInd}
+        ${paChips ? `<div style=\"display:flex; gap:6px; flex-wrap:wrap; margin-top:6px\"><div class=\"muted\">Price Window:</div> ${paChips}</div>` : ''}
+        ${betaChips ? `<div style=\"display:flex; gap:6px; flex-wrap:wrap; margin-top:6px\"><div class=\"muted\">Beta:</div> ${betaChips}</div>` : ''}
+        <details style="margin-top:8px"><summary class="muted">More details</summary>
+          ${vol?.tableData ? `<div class=\"muted\" style=\"margin-top:6px\">Volume (BSE+NSE Avg / Delivery%)</div>` : ''}
+          ${Array.isArray(vol?.tableData) ? `<table class=\"data-grid\"><thead><tr><th>Period</th><th>Avg</th><th>Delivery%</th><th>Delivery Vol</th></tr></thead><tbody>${(vol.tableData as any[]).slice(0,4).map(r=>`<tr><td>${escapeHtml(String(r?.[0]||''))}</td><td>${escapeHtml(String(r?.[1]||''))}</td><td>${escapeHtml(String(r?.[2]||''))}</td><td>${escapeHtml(String(r?.[3]||''))}</td></tr>`).join('')}</tbody></table>` : ''}
+          <div class="muted" style="margin-top:6px">Raw JSON</div>
+          <pre class="mono" style="white-space:pre-wrap; max-height:260px; overflow:auto">${escapeHtml(JSON.stringify(adv || data || {}, null, 2))}</pre>
+        </details>`;
+      return;
+    } catch {}
+
+    // If normalized missing, fall back to existing detailed render (below)
     // If raw adv JSON has parameters, build a graphics-first report directly from raw
     const body = (adv && (adv as any).body) || null;
     const params = (body && (body as any).parameters) || null;
@@ -2110,14 +2095,7 @@ async function renderTrendlyneAdvTech(symbol: string) {
           const c = String(o?.color||'').toLowerCase();
           return c==='positive' ? withAlpha(THEME.success,0.8) : c==='negative' ? withAlpha(THEME.danger,0.8) : withAlpha(THEME.muted,0.8);
         });
-        const ctx = (document.getElementById('tlOscBars') as HTMLCanvasElement)?.getContext('2d');
-        if (ctx && labels.length) {
-          upsertChart('tlOscBars', ctx, {
-            type: 'bar',
-            data: { labels, datasets: [{ label:'Value', data: values, backgroundColor: colors }] },
-            options: { indexAxis:'y', plugins:{ legend:{ display:false }, valueLabels:{ enabled:true, precision:2, color:'#374151' } }, scales:{ x:{ beginAtZero:false }, y:{ ticks:{ autoSkip:false, font:{ size:10 } } } } }
-          });
-        }
+        // Fallback oscillator bar chart removed (handled in separate card)
       } catch {}
 
         // MA Signals pies (SMA & EMA) + insight text
@@ -2144,25 +2122,7 @@ async function renderTrendlyneAdvTech(symbol: string) {
           } catch {}
         } catch {}
 
-      // Pivot vs Current (horizontal bars)
-      try {
-        const current = Number((params as any)?.current_price ?? NaN);
-        const piv = (params as any)?.pivot_level || {};
-        const order = ['S3','S2','S1','pivot_point','R1','R2','R3'];
-        const rows: Array<{label:string,value:number,color:string}> = [];
-        for (const k of order) {
-          const it = (piv as any)[k];
-          if (it && typeof it.value === 'number') rows.push({ label: String(it.name || k), value: Number(it.value), color: String(it.color||'') });
-        }
-        if (isFinite(current)) rows.push({ label:'Current', value: current, color: 'muted' });
-        const labels = rows.map(r => r.label);
-        const values = rows.map(r => r.value);
-        const colors = rows.map(r => r.label==='Current' ? withAlpha(THEME.muted,0.9) : /S\d/.test(r.label) ? withAlpha(THEME.success,0.7) : r.label==='Pivot' || /pivot/i.test(r.label) ? withAlpha(THEME.brand,0.8) : withAlpha(THEME.danger,0.7));
-        const ctx = (document.getElementById('tlPivotBars') as HTMLCanvasElement)?.getContext('2d');
-        if (ctx && labels.length) {
-          upsertChart('tlPivotBars', ctx, { type:'bar', data:{ labels, datasets:[{ label:'Level', data: values, backgroundColor: colors }] }, options:{ indexAxis:'y', plugins:{ legend:{ display:false }, valueLabels:{ enabled:true, precision:2, color:'#374151' } }, scales:{ x:{ beginAtZero:false } } } });
-        }
-      } catch {}
+      // Fallback pivot chart removed (handled in separate card)
 
       // Parameter cards � present each parameter in its own enriched card
       try {
@@ -2724,7 +2684,7 @@ async function renderTrendlyneAdvTech(symbol: string) {
   }
 }
 
-async function renderTrendlyneSma(symbol: string) {
+async function renderTrendlyneSma(symbol: string, opts?: { force?: boolean }) {
   const box = document.getElementById('tlSmaBody');
   if (!box) return;
   box.innerHTML = '<div class="muted">Loading SMA�</div>';
@@ -2736,13 +2696,10 @@ async function renderTrendlyneSma(symbol: string) {
       const r = await new Api().resolveTicker(base);
       tlidPref = r?.data?.entry?.tlid || undefined;
     } catch {}
-    let res = tlidPref ? await new Api().tlSmaByTlid(tlidPref) : await new Api().tlSmaBySymbol(symbol);
+    let res = tlidPref ? await new Api().tlSmaByTlid(tlidPref, { force: !!opts?.force }) : await new Api().tlSmaBySymbol(symbol, { force: !!opts?.force });
     let data = res?.data || {};
     if (!data?.sma) {
       // Attempt cookie refresh and retry implicitly through adv-tech
-      try { await new Api().tlCookieRefresh(); } catch {}
-      res = tlidPref ? await new Api().tlSmaByTlid(tlidPref) : await new Api().tlSmaBySymbol(symbol);
-      data = res?.data || {};
     }
     const tlid = data.tlid || '';
     const sma = data.sma || null;
@@ -2777,6 +2734,36 @@ async function renderTrendlyneSma(symbol: string) {
         const lbl = chg > 1 ? 'Bullish' : chg < -1 ? 'Bearish' : 'Sideways';
         const col = lbl === 'Bullish' ? 'var(--success)' : lbl === 'Bearish' ? 'var(--danger)' : 'var(--muted)';
         trendHtml = `<div class=\"muted\" style=\"margin-top:6px\">SMA Trend: <span class=\"chip\" style=\"background:${withAlpha(col,0.15)}; color:${col}\">${lbl} ${chg.toFixed(2)}%</span></div>`;
+        // Update Quality Scores from SMA dynamics (per-stock)
+        try {
+          const clamp = (n:number,min:number,max:number)=> Math.min(max, Math.max(min, n));
+          // Momentum: scale 20-bar % change to 0..100 (±20% => 0..100)
+          const mClamped = clamp(chg, -20, 20);
+          const mVal = Math.round(50 + (mClamped/20)*50);
+          const mColor: 'positive'|'negative'|'neutral' = chg > 0.5 ? 'positive' : chg < -0.5 ? 'negative' : 'neutral';
+          // Durability: inverse of recent volatility (avg abs 1-bar % change over last 20)
+          let avgAbs = 0; let cnt = 0;
+          for (let i = values.length - 19; i < values.length; i++) {
+            const a = values[i-1]; const b = values[i];
+            if (a && b) { avgAbs += Math.abs(((b - a) / a) * 100); cnt++; }
+          }
+          avgAbs = cnt ? (avgAbs / cnt) : 0;
+          const dClamped = clamp(avgAbs, 0, 5);
+          const dVal = Math.round(100 - (dClamped/5)*100);
+          const dColor: 'positive'|'negative'|'neutral' = dVal >= 60 ? 'positive' : dVal <= 40 ? 'negative' : 'neutral';
+          // Valuation: relative to median of last 100 SMA values (below median => higher score)
+          const tail = values.slice(-100);
+          const sorted = tail.slice().sort((a,b)=> a-b);
+          const mid = sorted.length ? sorted[Math.floor(sorted.length/2)] : prev;
+          const dev = ((last - (mid||last)) / (mid || 1)) * 100;
+          const vClamped = clamp(-dev, -20, 20);
+          const vVal = Math.round(50 + (vClamped/20)*50);
+          const vColor: 'positive'|'negative'|'neutral' = vVal >= 60 ? 'positive' : vVal <= 40 ? 'negative' : 'neutral';
+          try { localStorage.setItem('score:M', JSON.stringify({ val: mVal, color: mColor })); } catch {}
+          try { localStorage.setItem('score:D', JSON.stringify({ val: dVal, color: dColor })); } catch {}
+          try { localStorage.setItem('score:V', JSON.stringify({ val: vVal, color: vColor })); } catch {}
+          try { renderQualityScores(); } catch {}
+        } catch {}
       }
       box.innerHTML = `<div class=\"muted\">TLID: ${escapeHtml(String(tlid || 'N/A'))}</div><canvas id=\"tlSmaFull\" style=\"max-height:220px\"></canvas>${trendHtml}${metaHtml}<div class=\"muted\" style=\"font-size:11px; margin-top:6px\">Source: https://trendlyne.com/mapp/v1/stock/chart-data/${escapeHtml(String(tlid))}/SMA/</div>`;
       const ctx = (document.getElementById('tlSmaFull') as HTMLCanvasElement)?.getContext('2d');
@@ -2793,13 +2780,60 @@ async function renderTrendlyneSma(symbol: string) {
       try {
         const st = await new Api().tlCookieStatus();
         const info = st?.data ? ` - cookie: ${escapeHtml(JSON.stringify(st.data))}` : '';
-        box.innerHTML = `<div class=\"muted\">TLID: ${escapeHtml(String(tlid || 'N/A'))}${info}</div>${metaHtml}<div class=\"muted\" style=\"margin-top:6px\">No SMA data available. Try \"Refresh Cookie\" above.</div><div class=\"muted\" style=\"font-size:11px; margin-top:6px\">Source: https://trendlyne.com/mapp/v1/stock/chart-data/${escapeHtml(String(tlid))}/SMA/</div>`;
+        box.innerHTML = `<div class=\"muted\">TLID: ${escapeHtml(String(tlid || 'N/A'))}${info}</div>${metaHtml}<div class=\"muted\" style=\"margin-top:6px\">No SMA data available. Try \\\"Force Refresh (Trendlyne)\\\" above.</div><div class=\"muted\" style=\"font-size:11px; margin-top:6px\">Source: https://trendlyne.com/mapp/v1/stock/chart-data/${escapeHtml(String(tlid))}/SMA/</div>`;
       } catch {
-        box.innerHTML = `<div class=\"muted\">TLID: ${escapeHtml(String(tlid || 'N/A'))}</div>${metaHtml}<div class=\"muted\" style=\"margin-top:6px\">No SMA data available. Try \"Refresh Cookie\" above.</div><div class=\"muted\" style=\"font-size:11px; margin-top:6px\">Source: https://trendlyne.com/mapp/v1/stock/chart-data/${escapeHtml(String(tlid))}/SMA/</div>`;
+        box.innerHTML = `<div class=\"muted\">TLID: ${escapeHtml(String(tlid || 'N/A'))}</div>${metaHtml}<div class=\"muted\" style=\"margin-top:6px\">No SMA data available. Try \\\"Force Refresh (Trendlyne)\\\" above.</div><div class=\"muted\" style=\"font-size:11px; margin-top:6px\">Source: https://trendlyne.com/mapp/v1/stock/chart-data/${escapeHtml(String(tlid))}/SMA/</div>`;
       }
     }
   } catch (e:any) {
     box.innerHTML = `<div class="mono" style="color:#ff6b6b">${escapeHtml(e?.message || e)}</div>`;
+  }
+}
+
+async function renderMarketOverview() {
+  const box = document.getElementById('marketOverview');
+  if (!box) return;
+  // Ensure a body container exists
+  box.innerHTML = '<div class="muted">Market Overview</div><div id="moBody" class="mono" style="margin-top:6px"></div>';
+  const body = document.getElementById('moBody');
+  if (!body) return;
+  body.textContent = 'Loading...';
+  try {
+    const [mmi, indices] = await Promise.all([
+      new Api().tickertapeMmi().catch(()=>null),
+      new Api().etIndices().catch(()=>null)
+    ]);
+    let chips = '';
+    try {
+      const d: any = mmi?.data ?? null;
+      if (d !== null && d !== undefined) {
+        const m = (d.mmi ?? d.value ?? d.index ?? d) as any;
+        const zone = (d.zone ?? d.label ?? '') as any;
+        const val = typeof m === 'number' ? Math.round(m) : String(m);
+        chips += `<span class="chip" style="background:${withAlpha('#0ea5e9',0.15)}; color:#0ea5e9">MMI: ${escapeHtml(String(val))}${zone?` (${escapeHtml(String(zone))})`:''}</span> `;
+      }
+    } catch {}
+    try {
+      const arr: any[] = Array.isArray(indices?.data) ? (indices!.data as any[]).slice(0, 6) : [];
+      chips += arr.map((it: any) => {
+        const name = it.name || it.index || it.symbol || 'Index';
+        const last = Number(it.last ?? it.price ?? it.close ?? NaN);
+        const chRaw = it.changePercent ?? it.chgPct ?? it.percent ?? it.change_percent ?? it.pct ?? '';
+        const chNum = Number(chRaw);
+        const col = Number.isFinite(chNum) ? (chNum >= 0 ? 'var(--success)' : 'var(--danger)') : 'var(--muted)';
+        const sign = Number.isFinite(chNum) && chNum >= 0 ? '+' : '';
+        const chDisp = Number.isFinite(chNum) ? `${sign}${chNum.toFixed(2)}%` : (typeof chRaw === 'string' ? chRaw : '');
+        const lastDisp = Number.isFinite(last) ? ` ${last.toFixed(2)}` : '';
+        return `<span class=\"chip\" style=\"background:var(--panel-2); border:1px solid var(--border); color:${col}\">${escapeHtml(String(name))}:${lastDisp} ${escapeHtml(String(chDisp))}</span>`;
+      }).join(' ');
+    } catch {}
+    if (!chips) {
+      body.innerHTML = '<div class="muted">No market data available.</div>';
+    } else {
+      body.innerHTML = `<div style="display:flex; gap:6px; flex-wrap:wrap">${chips}</div>`;
+    }
+  } catch (e: any) {
+    body.innerHTML = `<div class=\"mono\" style=\"color:#ff6b6b\">${escapeHtml(e?.message || e)}</div>`;
   }
 }
 
@@ -2978,9 +3012,6 @@ async function renderYahooData(symbol: string) {
       { name: 'ET Indices', fn: () => new Api().etIndices() },
       { name: 'Tickertape MMI', fn: () => new Api().tickertapeMmi() },
       { name: 'MarketsMojo Valuation', fn: () => new Api().marketsMojoValuation() },
-      { name: 'Trendlyne Cookie', fn: () => new Api().tlCookieStatus() },
-      { name: `Trendlyne SMA (${sym})`, fn: () => new Api().tlSmaBySymbol(sym) },
-      { name: `Trendlyne Adv-Tech (${sym})`, fn: () => new Api().tlAdvTechBySymbol(sym) },
       { name: `Trendlyne Derivatives (${dateKey})`, fn: () => new Api().tlDerivatives(dateKey) },
     ];
     const results: Array<{name:string, ok:boolean, ms:number, note?:string}> = [];
@@ -3112,6 +3143,20 @@ async function getNewsSentimentCached(symbol: string) {
 // Kick off suggestions on load
 renderSuggestions().catch(()=>{});
 
+// History cache for mini sparklines (watchlist)
+async function getHistoryCached(symbol: string, days=60) {
+  const key = `hist:${symbol}:${days}`; const ttl = 5*60*1000;
+  try { const raw = sessionStorage.getItem(key); if (raw) { const j=JSON.parse(raw); if (j && (Date.now()-Number(j.ts))<ttl) return j.val; } } catch {}
+  try {
+    const h = await new Api().history(symbol);
+    const rows = Array.isArray(h?.data) ? h.data : [];
+    const last = rows.slice(-days);
+    const out = last.map((r:any)=> ({ t: String(r.date||'').slice(0,10), c: Number(r.close) }));
+    try { sessionStorage.setItem(key, JSON.stringify({ ts: Date.now(), val: out })); } catch {}
+    return out;
+  } catch { return []; }
+}
+
 // Background prefetch of TL normalized for broader suggestions, then refresh once
 let _tlWarmDone = false;
 async function warmTlNormalized(limit = 100) {
@@ -3183,3 +3228,489 @@ updateRagExplainHint();
     }
   });
 })();
+
+// TL Cache viewer (SMA/ADV)
+async function renderTlCache(symbol: string) {
+  const body = document.getElementById('tlCacheBody');
+  if (!body) return;
+  body.textContent = 'Loading TL cache...';
+  try {
+    const [smaRes, advRes] = await Promise.all([
+      fetch(`/api/tl-cache/by-symbol/${encodeURIComponent(symbol)}?kind=sma`).then(r=>r.json()).catch(()=>({})),
+      fetch(`/api/tl-cache/by-symbol/${encodeURIComponent(symbol)}?kind=adv`).then(r=>r.json()).catch(()=>({}))
+    ]);
+    const sma = smaRes?.data || null;
+    const adv = advRes?.data || null;
+    const lastSma = (()=>{
+      try {
+        const arr = Array.isArray(sma?.data) ? sma.data : [];
+        const tail = arr.slice(-5).map((p:any)=> Number(p?.v ?? p?.value ?? 0)).filter((n:number)=> Number.isFinite(n));
+        return tail.length ? tail.map(n=> n.toFixed(2)).join(', ') : '—';
+      } catch { return '—'; }
+    })();
+    const advSummary = (()=>{
+      try {
+        const sum = adv?.summary || adv?.Summary || {};
+        const buy = Number(sum.buy ?? 0), neutral = Number(sum.neutral ?? 0), sell = Number(sum.sell ?? 0);
+        if (buy || neutral || sell) return `Buy: ${buy}, Neutral: ${neutral}, Sell: ${sell}`;
+      } catch {}
+      return '—';
+    })();
+    body.innerHTML = `
+      <div class="grid-2" style="gap:10px">
+        <div>
+          <div class="muted">SMA (last points)</div>
+          <div>${lastSma}</div>
+        </div>
+        <div>
+          <div class="muted">ADV Summary</div>
+          <div>${advSummary}</div>
+        </div>
+      </div>`;
+  } catch (e:any) {
+    body.innerHTML = `<div class="mono" style="color:#ff6b6b">${escapeHtml(e?.message || e)}</div>`;
+  }
+}
+
+// Stored features charts
+async function renderFeaturesStored(symbol: string) {
+  const body = document.getElementById('fsBody');
+  if (!body) return;
+  body.innerHTML = '<span class="spinner"></span> Loading features...';
+  try {
+    const days = 180;
+    const res = await fetch(`/api/features-stored/${encodeURIComponent(symbol)}?days=${days}`).then(r=>r.json());
+    const rows: Array<any> = Array.isArray(res?.data) ? res.data : [];
+    if (!rows.length) { body.innerHTML = '<div class="muted">No stored features.</div>'; return; }
+    const labels = rows.map(r=> String(r.date));
+    const sma20 = rows.map(r=> Number(r.sma20 ?? NaN));
+    const ema50 = rows.map(r=> Number(r.ema50 ?? NaN));
+    const rsi = rows.map(r=> Number(r.rsi ?? NaN));
+    const mom = rows.map(r=> Number(r.momentum ?? NaN));
+    body.innerHTML = `
+      <div class="muted">MA</div>
+      <canvas id="fsChartMa" style="max-height:220px"></canvas>
+      <div class="muted" style="margin-top:8px">RSI & Momentum</div>
+      <canvas id="fsChartOsc" style="max-height:220px"></canvas>`;
+    const maCtx = (document.getElementById('fsChartMa') as HTMLCanvasElement)?.getContext('2d');
+    const osCtx = (document.getElementById('fsChartOsc') as HTMLCanvasElement)?.getContext('2d');
+    if (maCtx) {
+      upsertChart('fsChartMa', maCtx, { type:'line', data:{ labels, datasets:[
+        { label:'SMA20', data: sma20, borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.12)', borderWidth:2, fill: true, tension:0.2, pointRadius:0 },
+        { label:'EMA50', data: ema50, borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.10)', borderWidth:2, fill: true, tension:0.2, pointRadius:0 }
+      ]}, options:{ plugins:{ legend:{ position:'bottom' } } } });
+    }
+    if (osCtx) {
+      upsertChart('fsChartOsc', osCtx, { type:'line', data:{ labels, datasets:[
+        { label:'RSI', data: rsi, borderColor: '#6366f1', backgroundColor: 'rgba(99,102,241,0.12)', borderWidth:2, fill: true, tension:0.2, pointRadius:0 },
+        { label:'Momentum', data: mom, borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,0.10)', borderWidth:2, fill: true, tension:0.2, pointRadius:0 }
+      ]}, options:{ plugins:{ legend:{ position:'bottom' } } } });
+    }
+  } catch (e:any) {
+    body.innerHTML = `<div class="mono" style="color:#ff6b6b">${escapeHtml(e?.message || e)}</div>`;
+  }
+}
+
+// Router-card registry bridge (safe append)
+try {
+  window.addEventListener('hashchange', () => {
+    try {
+      const h = (location.hash || '').toLowerCase();
+      const p = h.startsWith('#/insight') ? 'insight' : h.startsWith('#/ai') ? 'ai' : h.startsWith('#/watchlist') ? 'watchlist' : h.startsWith('#/portfolio') ? 'portfolio' : h.startsWith('#/alerts') ? 'alerts' : h.startsWith('#/settings') ? 'settings' : h.startsWith('#/health') ? 'health' : 'overview';
+      CardRegistry.showPage(p as any);
+    } catch {}
+  });
+  window.addEventListener('DOMContentLoaded', () => {
+    try {
+      const h = (location.hash || '').toLowerCase();
+      const p = h.startsWith('#/insight') ? 'insight' : h.startsWith('#/ai') ? 'ai' : h.startsWith('#/watchlist') ? 'watchlist' : h.startsWith('#/portfolio') ? 'portfolio' : h.startsWith('#/alerts') ? 'alerts' : h.startsWith('#/settings') ? 'settings' : h.startsWith('#/health') ? 'health' : 'overview';
+      CardRegistry.showPage(p as any);
+      const sel = document.getElementById('stockSelect') as HTMLSelectElement | null;
+      const v = sel?.value || '';
+      if (v) emitSymbolChange(v);
+    } catch {}
+  });
+} catch {}
+
+// ----- Extra Pages: Watchlist / Portfolio / Alerts / Settings -----
+function ensureExtraPages() {
+  const container = document.querySelector('main.content .container') as HTMLElement | null;
+  if (!container) return;
+  const mkCard = (id: string, title: string, bodyId?: string) => {
+    if (document.getElementById(id)) return;
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.id = id;
+    const inner = `<div class="muted">${title}</div>` + (bodyId ? `<div id="${bodyId}" style="margin-top:6px"></div>` : '');
+    card.innerHTML = inner;
+    container.appendChild(card);
+  };
+  mkCard('watchlistCard', 'Watchlist', 'watchlistBody');
+  mkCard('portfolioCard', 'Portfolio', 'portfolioBody');
+  mkCard('alertsCard', 'Alerts & Events', 'alertsBody');
+  mkCard('settingsCard', 'Settings', 'settingsBody');
+  // Defaults hidden; page router will toggle
+  ['watchlistCard','portfolioCard','alertsCard','settingsCard'].forEach(id => { const el = document.getElementById(id); if (el) (el as HTMLElement).style.display = 'none'; });
+}
+
+type WLItem = { symbol: string };
+function loadWatchlist(): WLItem[] {
+  try { const raw = localStorage.getItem('watchlist') || '[]'; const arr = JSON.parse(raw); return Array.isArray(arr) ? arr : []; } catch { return []; }
+}
+function saveWatchlist(items: WLItem[]) {
+  try { localStorage.setItem('watchlist', JSON.stringify(items)); } catch {}
+}
+async function renderWatchlist() {
+  const body = document.getElementById('watchlistBody');
+  if (!body) return;
+  const items = loadWatchlist();
+  if (!items.length) { body.innerHTML = '<div class="muted">Your watchlist is empty. Select a stock and click "+ Watchlist".</div>'; return; }
+  body.innerHTML = '<span class="spinner"></span> Loading watchlist...';
+
+  // Gather metrics
+  type Row = { symbol:string; last:number|null; change:number|null; momentum:number|null; sentiment:number; };
+  const data: Row[] = [];
+  await Promise.all(items.map(async (it) => {
+    const s = (it.symbol || '').toUpperCase();
+    const [ov, sent] = await Promise.all([
+      getOverviewCached(s).catch(()=>null),
+      getNewsSentimentCached(s).catch(()=>0)
+    ]);
+    const last = Number(ov?.data?.lastClose ?? NaN);
+    const ch = Number(ov?.data?.periodChangePct ?? NaN);
+    const mom = Number(ov?.data?.momentum ?? NaN);
+    data.push({ symbol: s, last: Number.isFinite(last)? last : null, change: Number.isFinite(ch)? ch : null, momentum: Number.isFinite(mom)? mom : null, sentiment: Number(sent) || 0 });
+  }));
+
+  // Sorting state
+  (window as any).__wlSortKey = (window as any).__wlSortKey || 'symbol';
+  (window as any).__wlSortDir = (window as any).__wlSortDir || 'asc';
+  const sortKey: keyof Row = (window as any).__wlSortKey;
+  const sortDir: 'asc'|'desc' = (window as any).__wlSortDir;
+  data.sort((a,b)=>{
+    const va:any = a[sortKey]; const vb:any = b[sortKey];
+    const ra = (va==null || Number.isNaN(va)) ? -Infinity : va;
+    const rb = (vb==null || Number.isNaN(vb)) ? -Infinity : vb;
+    const cmp = (ra < rb) ? -1 : (ra > rb) ? 1 : 0;
+    return sortDir === 'asc' ? cmp : -cmp;
+  });
+
+  const head = `<tr>
+    <th data-key="symbol">Symbol</th>
+    <th data-key="last" style="text-align:right">Last</th>
+    <th data-key="change" style="text-align:right">Change%</th>
+    <th data-key="momentum" style="text-align:right">Momentum</th>
+    <th data-key="sentiment" style="text-align:right">News Sent.</th>
+    <th>Spark</th>
+    <th></th>
+  </tr>`;
+  const rows = data.map(r=>{
+    const sColor = r.sentiment>=0 ? 'var(--success)' : 'var(--danger)';
+    const mColor = (r.momentum ?? 0)>=0 ? 'var(--success)' : 'var(--danger)';
+    const sparkId = `wlSpark-${r.symbol}`;
+    return `<tr>
+      <td style="font-weight:600">${r.symbol}</td>
+      <td style="text-align:right">${r.last!=null ? r.last.toFixed(2) : '-'}</td>
+      <td style="text-align:right">${r.change!=null ? r.change.toFixed(2)+'%' : '-'}</td>
+      <td style="text-align:right; color:${mColor}">${r.momentum!=null ? (r.momentum*100).toFixed(1)+'%' : '-'}</td>
+      <td style="text-align:right; color:${sColor}">${r.sentiment.toFixed(2)}</td>
+      <td style="min-width:120px"><canvas id="${sparkId}" class="spark-mini"></canvas></td>
+      <td style="text-align:right"><button class="btn-sm" data-remove="${r.symbol}">Remove</button></td>
+    </tr>`;
+  }).join('');
+  body.innerHTML = `<table class="data-grid">${head}${rows}</table>`;
+  // Sort header indicators and click
+  const ths = Array.from(body.querySelectorAll('th[data-key]')) as HTMLTableCellElement[];
+  ths.forEach(th => {
+    const k = th.getAttribute('data-key') || '';
+    th.classList.remove('sort-asc','sort-desc');
+    if (k === sortKey) th.classList.add(sortDir === 'asc' ? 'sort-asc' : 'sort-desc');
+    th.addEventListener('click', () => {
+      const key = th.getAttribute('data-key') || 'symbol';
+      const curK = (window as any).__wlSortKey;
+      const curD = (window as any).__wlSortDir;
+      (window as any).__wlSortKey = key;
+      (window as any).__wlSortDir = (curK === key && curD === 'asc') ? 'desc' : 'asc';
+      renderWatchlist();
+    });
+  });
+  // Remove handlers
+  body.querySelectorAll('button[data-remove]')
+    .forEach(btn => btn.addEventListener('click', (ev) => {
+      const sym = (ev.currentTarget as HTMLButtonElement).getAttribute('data-remove') || '';
+      const cur = loadWatchlist().filter(x => (x.symbol||'').toUpperCase() !== sym.toUpperCase());
+      saveWatchlist(cur);
+      renderWatchlist();
+    }));
+
+  // Render mini sparklines
+  await Promise.all(data.map(async (r) => {
+    const series = await getHistoryCached(r.symbol, 60);
+    const labels = series.map(x => x.t);
+    const values = series.map(x => x.c);
+    const ctx = (document.getElementById(`wlSpark-${r.symbol}`) as HTMLCanvasElement | null)?.getContext('2d');
+    if (!ctx) return;
+    const first = values[0]; const last = values[values.length-1];
+    let line = THEME.brand, fill = withAlpha(THEME.brand, 0.12);
+    if (Number.isFinite(first) && Number.isFinite(last)) {
+      if (last > first) { line = THEME.success; fill = withAlpha(THEME.success, 0.12); }
+      if (last < first) { line = THEME.danger; fill = withAlpha(THEME.danger, 0.12); }
+    }
+    upsertChart(`wlSpark-${r.symbol}`, ctx, {
+      type:'line',
+      data: { labels, datasets: [{ data: values, borderColor: line, backgroundColor: fill, borderWidth: 1.5, fill:true, tension:0.25, pointRadius:0 }] },
+      options: { plugins:{ legend:{ display:false }, tooltip:{ enabled:false } }, scales: { x:{ display:false }, y:{ display:false } } }
+    });
+  }));
+}
+
+function initSettingsPage() {
+  const body = document.getElementById('settingsBody');
+  if (!body) return;
+  body.innerHTML = `
+    <div class="muted">Preferences</div>
+    <div class="flex" style="gap:8px; margin-top:6px; flex-wrap:wrap">
+      <button id="clearWatchlist" class="btn-sm">Clear Watchlist</button>
+      <button id="clearCaches" class="btn-sm">Clear Caches</button>
+    </div>
+    <div class="muted" style="margin-top:8px; font-size:12px">Theme and timeframe controls are available in the top toolbar.</div>
+  `;
+  const clearW = document.getElementById('clearWatchlist');
+  clearW?.addEventListener('click', () => { saveWatchlist([]); renderWatchlist(); });
+  const clearC = document.getElementById('clearCaches');
+  clearC?.addEventListener('click', () => { try { sessionStorage.clear(); localStorage.removeItem('selectedSymbol'); } catch {} alert('Cleared caches.'); });
+}
+
+// Add to watchlist button wiring
+(function initWatchlistButton(){
+  const btn = document.getElementById('addToWatchlist');
+  btn?.addEventListener('click', () => {
+    const sel = document.getElementById('stockSelect') as HTMLSelectElement | null;
+    const sym = (sel?.value || '').toUpperCase();
+    if (!sym) return;
+    const wl = loadWatchlist();
+    if (!wl.some(x => (x.symbol||'').toUpperCase() === sym)) {
+      wl.push({ symbol: sym });
+      saveWatchlist(wl);
+      renderWatchlist();
+    }
+  });
+})();
+
+window.addEventListener('DOMContentLoaded', () => {
+  ensureExtraPages();
+  renderWatchlist();
+  initSettingsPage();
+  initPortfolioPage();
+  try { renderQualityScores(); } catch {}
+});
+
+// ----- Portfolio placeholder -----
+function initPortfolioPage() {
+  const body = document.getElementById('portfolioBody');
+  if (!body) return;
+  if ((body as any).__init_done) return; // initialize once
+  (body as any).__init_done = true;
+  body.innerHTML = `
+    <div class="muted">Paste CSV: symbol, quantity, avg_price</div>
+    <div class="flex" style="gap:8px; margin-top:6px; align-items:flex-start">
+      <textarea id="pfCsv" rows="6" style="flex:1; min-width:260px" placeholder="symbol,qty,avg_price\nAAPL,10,175\nTSLA,5,220\nINFY.NS,12,1480"></textarea>
+      <div style="display:flex; flex-direction:column; gap:6px">
+        <button id="pfCompute" class="btn">Compute P/L</button>
+        <button id="pfSample" class="btn-sm">Load Sample</button>
+      </div>
+    </div>
+    <div id="pfOut" style="margin-top:10px"></div>
+  `;
+  const ta = document.getElementById('pfCsv') as HTMLTextAreaElement | null;
+  const out = document.getElementById('pfOut') as HTMLElement | null;
+  const btn = document.getElementById('pfCompute');
+  const sample = document.getElementById('pfSample');
+  sample?.addEventListener('click', () => {
+    if (!ta) return;
+    ta.value = 'symbol,qty,avg_price\nAAPL,10,175\nTSLA,5,220\nINFY.NS,12,1480\nDABUR.NS,20,560';
+  });
+  btn?.addEventListener('click', async () => {
+    if (!ta || !out) return;
+    const rows = parseCsv(ta.value || '');
+    if (!rows.length) { out.innerHTML = '<div class="muted">No valid rows found.</div>'; return; }
+    out.innerHTML = '<span class="spinner"></span> Calculating...';
+    type R = { symbol:string; qty:number; avg:number; last:number|null; value:number; pl:number; plpct:number|null };
+    const data: R[] = [];
+    await Promise.all(rows.map(async r => {
+      const sym = String(r.symbol||'').toUpperCase();
+      const qty = Number(r.qty||r.quantity||r.shares||0);
+      const avg = Number(r.avg_price||r.avg||r.price||0);
+      if (!sym || !Number.isFinite(qty) || !Number.isFinite(avg)) return;
+      const ov = await getOverviewCached(sym).catch(()=>null);
+      const last = Number(ov?.data?.lastClose ?? NaN);
+      const lastNum = Number.isFinite(last) ? last : null;
+      const value = lastNum!=null ? lastNum*qty : 0;
+      const pl = (lastNum!=null ? (lastNum - avg) : 0) * qty;
+      const plpct = lastNum!=null && avg!==0 ? ((lastNum-avg)/avg)*100 : null;
+      data.push({ symbol:sym, qty, avg, last:lastNum, value, pl, plpct });
+    }));
+    // totals
+    const totalValue = data.reduce((a,x)=> a + x.value, 0);
+    const totalCost = data.reduce((a,x)=> a + (x.avg * x.qty), 0);
+    const totalPL = totalValue - totalCost;
+    const totalPLPct = totalCost!==0 ? (totalPL/totalCost)*100 : null;
+    const head = `<tr>
+      <th>Symbol</th>
+      <th style="text-align:right">Qty</th>
+      <th style="text-align:right">Avg</th>
+      <th style="text-align:right">Last</th>
+      <th style="text-align:right">Value</th>
+      <th style="text-align:right">P/L</th>
+      <th style="text-align:right">P/L%</th>
+    </tr>`;
+    const rowsHtml = data.map(d => {
+      const plc = d.pl>=0 ? 'var(--success)' : 'var(--danger)';
+      return `<tr>
+        <td>${d.symbol}</td>
+        <td style="text-align:right">${d.qty}</td>
+        <td style="text-align:right">${d.avg.toFixed(2)}</td>
+        <td style="text-align:right">${d.last!=null ? d.last.toFixed(2) : '-'}</td>
+        <td style="text-align:right">${d.value.toFixed(2)}</td>
+        <td style="text-align:right; color:${plc}">${d.pl.toFixed(2)}</td>
+        <td style="text-align:right; color:${plc}">${d.plpct!=null ? d.plpct.toFixed(2)+'%' : '-'}</td>
+      </tr>`;
+    }).join('');
+    const totc = totalPL>=0 ? 'var(--success)' : 'var(--danger)';
+    const foot = `<tr>
+      <th>Total</th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th style="text-align:right">${totalValue.toFixed(2)}</th>
+      <th style="text-align:right; color:${totc}">${totalPL.toFixed(2)}</th>
+      <th style="text-align:right; color:${totc}">${totalPLPct!=null ? totalPLPct.toFixed(2)+'%' : '-'}</th>
+    </tr>`;
+    out.innerHTML = `<table class="data-grid">${head}${rowsHtml}${foot}</table>`;
+  });
+}
+
+function parseCsv(text: string): Array<Record<string, string|number>> {
+  const lines = (text || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  if (!lines.length) return [];
+  const first = lines[0];
+  const hasHeader = /symbol/i.test(first) && /(qty|quantity|shares)/i.test(first);
+  const rows = hasHeader ? lines.slice(1) : lines;
+  const out: Array<Record<string, string|number>> = [];
+  for (const line of rows) {
+    const parts = line.split(/\s*,\s*/g);
+    if (parts.length < 3) continue;
+    const [symbol, qty, avg] = parts;
+    out.push({ symbol, qty: Number(qty), avg_price: Number(avg) });
+  }
+  return out;
+}
+
+// Render three score cards (Durability / Valuation / Momentum)
+async function renderQualityScores() {
+  const wrap = document.getElementById('scoreCardsBody');
+  if (!wrap) return;
+  wrap.innerHTML = '<div class="muted">Loading scores…</div>';
+
+  // Helpers
+  type S = { val: number; color: 'positive'|'negative'|'neutral' };
+  const color = (c: S['color']) => c==='positive' ? cssVar('--success','#16a34a') : c==='negative' ? cssVar('--danger','#ef4444') : '#f1c40f';
+  const label = (c: S['color']) => c==='positive' ? 'Positive' : c==='negative' ? 'Negative' : 'Neutral';
+  const card = (name: string, s: S) => `
+    <div class="score">
+      <div class="label">${name}</div>
+      <div class="value" style="color:${color(s.color)}">${Number(s.val).toFixed(2)}
+        <span class="pill" style="background:${withAlpha(color(s.color),0.15)}; color:${color(s.color)}">${label(s.color)}</span>
+      </div>
+    </div>`;
+
+  // Determine current selection (base symbol without suffix for resolution)
+  const sel = document.getElementById('stockSelect') as HTMLSelectElement | null;
+  const raw = (sel?.value || (localStorage.getItem('selectedSymbol') || '')).toUpperCase();
+  const base = raw.includes('.') ? raw.split('.')[0] : raw;
+  if (!base) { wrap.innerHTML = '<div class="muted">Select a stock to see scores.</div>'; return; }
+
+  try {
+    // Fetch SMA bundle via backend (resolves tlid automatically)
+    const smaRes = await new Api().tlSmaBySymbol(base).catch(()=>null);
+    const sma = (smaRes?.data?.sma ?? smaRes?.sma ?? smaRes?.data ?? null) as any;
+
+    // Preferred source: Trendlyne stockHeaders + stockData provide D/V/M directly
+    const headers: Array<{ unique_name?: string; name?: string }> = (sma?.body?.stockHeaders || []) as any[];
+    const row: any[] = Array.isArray(sma?.body?.stockData) ? sma.body.stockData : [];
+    const findIdx = (key: string) => headers.findIndex(h => String(h?.unique_name || '').toLowerCase() === key);
+    const iD = findIdx('d_value');
+    const iV = findIdx('v_value');
+    const iM = findIdx('m_value');
+    const iDc = findIdx('d_color');
+    const iVc = findIdx('v_color');
+    const iMc = findIdx('m_color');
+
+    let sD: S | null = null, sV: S | null = null, sM: S | null = null;
+    if (row.length && iD >= 0 && iV >= 0 && iM >= 0) {
+      const dRaw = Number(row[iD]);
+      const vRaw = Number(row[iV]);
+      const mRaw = Number(row[iM]);
+      const dc = String(row[iDc] || 'neutral') as S['color'];
+      const vc = String(row[iVc] || 'neutral') as S['color'];
+      const mc = String(row[iMc] || 'neutral') as S['color'];
+      sD = { val: Number.isFinite(dRaw) ? dRaw : 0, color: (dc === 'positive' || dc === 'negative') ? dc : 'neutral' };
+      sV = { val: Number.isFinite(vRaw) ? vRaw : 0, color: (vc === 'positive' || vc === 'negative') ? vc : 'neutral' };
+      sM = { val: Number.isFinite(mRaw) ? mRaw : 0, color: (mc === 'positive' || mc === 'negative') ? mc : 'neutral' };
+    }
+
+    // Fallback: derive from SMA series if headers not present
+    if (!sD || !sV || !sM) {
+      // Heuristics to extract latest SMA(20/50/200)
+      function latestOf(series: any): number | null {
+        if (!series) return null;
+        try {
+          if (Array.isArray(series) && series.length) {
+            const last = series[series.length-1];
+            const v = Array.isArray(last) ? Number(last[1] ?? last[0]) : Number((last as any).v ?? (last as any).value ?? last);
+            return Number.isFinite(v) ? v : null;
+          }
+        } catch {}
+        return null;
+      }
+      function pickSeries(src: any, keyHints: string[]): any {
+        if (!src) return null;
+        for (const k of Object.keys(src)) {
+          const kl = k.toLowerCase();
+          if (keyHints.some(h => kl.includes(h))) return (src as any)[k];
+        }
+        if (Array.isArray(src)) {
+          const ds = src.find((d: any)=> {
+            const lab = String(d?.label || d?.name || '').toLowerCase();
+            return keyHints.some(h=> lab.includes(h));
+          });
+          if (ds) return ds.data || ds.values || ds.series || ds;
+        }
+        if (Array.isArray(src?.data)) return src.data;
+        return null;
+      }
+      const s20 = pickSeries(sma, ['20']);
+      const s50 = pickSeries(sma, ['50']);
+      const s200 = pickSeries(sma, ['200']);
+      const v20 = latestOf(s20);
+      const v50 = latestOf(s50);
+      const v200 = latestOf(s200);
+      const valOr = (v: number | null, fallback: number) => (Number.isFinite(Number(v)) ? Number(v) : fallback);
+      const mVal = valOr(v20, valOr(v50, valOr(v200, 0)));
+      const dVal = valOr(v200, valOr(v50, valOr(v20, 0)));
+      const valVal = valOr(v50, valOr(v20, valOr(v200, 0)));
+      sD = sD || { val: dVal, color: 'neutral' };
+      sV = sV || { val: valVal, color: 'neutral' };
+      sM = sM || { val: mVal, color: 'neutral' };
+    }
+
+    wrap.innerHTML = `<div class="score-grid">${card('Durability Score', sD)}${card('Valuation Score', sV)}${card('Momentum Score', sM)}</div>`;
+  } catch (e:any) {
+    wrap.innerHTML = `<div class="mono" style="color:#ff6b6b">${escapeHtml(e?.message || e)}</div>`;
+  }
+}
+
+
+
+
+

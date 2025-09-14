@@ -6,7 +6,6 @@ import { resolveTicker } from '../utils/ticker.js';
 import db from '../db.js';
 import fetch from 'node-fetch';
 import { tlAdvTechnical } from '../providers/trendlyne.js';
-import { fetchYahooQuoteSummary } from '../providers/yahoo.js';
 import { fetchMcTech } from '../providers/moneycontrol.js';
 
 export const router = Router();
@@ -61,7 +60,7 @@ router.post('/stream', asyncHandler(async (req, res) => {
   res.end();
 }));
 
-// Reindex recent sources for a symbol (namespace = Yahoo symbol)
+// Reindex recent sources for a symbol (namespace = symbol)
 router.post('/reindex/:symbol', asyncHandler(async (req, res) => {
   const symbol = String(req.params.symbol || '').toUpperCase();
   const days = req.query.days ? Number(req.query.days) : (req.body?.days ? Number(req.body.days) : 60);
@@ -132,28 +131,7 @@ router.post('/reindex/:symbol', asyncHandler(async (req, res) => {
       }
     }
   } catch {}
-  // Yahoo summary details (price, 52w range, PE, beta, mcap, dividend)
-  try {
-    const mods = ['price','summaryDetail','defaultKeyStatistics','financialData'];
-    const sum: any = await fetchYahooQuoteSummary(symbol, mods).catch(()=>null);
-    const r = (sum?.result?.[0]) || sum?.result?.length===0 ? null : sum;
-    const obj: any = (sum?.result?.[0]) || {};
-    const price = obj?.price?.regularMarketPrice?.raw ?? obj?.price?.regularMarketPrice ?? obj?.price?.regularMarketPrice ?? null;
-    const low = obj?.summaryDetail?.fiftyTwoWeekLow?.raw ?? obj?.summaryDetail?.fiftyTwoWeekLow ?? null;
-    const high = obj?.summaryDetail?.fiftyTwoWeekHigh?.raw ?? obj?.summaryDetail?.fiftyTwoWeekHigh ?? null;
-    const pe = obj?.summaryDetail?.trailingPE?.raw ?? obj?.summaryDetail?.trailingPE ?? null;
-    const beta = obj?.summaryDetail?.beta?.raw ?? obj?.summaryDetail?.beta ?? null;
-    const mcap = obj?.price?.marketCap?.raw ?? obj?.price?.marketCap ?? obj?.summaryDetail?.marketCap?.raw ?? null;
-    const div = obj?.summaryDetail?.dividendYield?.raw ?? obj?.summaryDetail?.dividendYield ?? null;
-    const parts: string[] = [];
-    if (isFinite(Number(price))) parts.push(`price=${Number(price).toFixed(2)}`);
-    if (isFinite(Number(low)) && isFinite(Number(high))) parts.push(`52w=${Number(low).toFixed(2)}-${Number(high).toFixed(2)}`);
-    if (isFinite(Number(pe))) parts.push(`PE=${Number(pe).toFixed(2)}`);
-    if (isFinite(Number(beta))) parts.push(`beta=${Number(beta).toFixed(2)}`);
-    if (isFinite(Number(mcap))) parts.push(`mcap=${Number(mcap)}`);
-    if (isFinite(Number(div))) parts.push(`divYield=${Number(div).toFixed(4)}`);
-    if (parts.length) texts.push({ text: `Yahoo Summary: ${parts.join(', ')}`, metadata: { date: new Date().toISOString().slice(0,10), source: 'yahoo', url: '' } });
-  } catch {}
+  // Yahoo summary removed
   // Moneycontrol technicals quick summary (D)
   try {
     const base = symbol.includes('.') ? symbol.split('.')[0] : symbol;
@@ -197,12 +175,10 @@ router.post('/reindex/:symbol', asyncHandler(async (req, res) => {
   // Apply include toggles by source
   try {
     const includeTl = String(req.query.includeTl ?? req.body?.includeTl ?? 'true').toLowerCase() === 'true';
-    const includeYahoo = String(req.query.includeYahoo ?? req.body?.includeYahoo ?? 'true').toLowerCase() === 'true';
     const includeMc = String(req.query.includeMc ?? req.body?.includeMc ?? 'true').toLowerCase() === 'true';
     const filtered = texts.filter(t => {
       const src = String((t.metadata as any)?.source || '');
       if (src === 'trendlyne' && !includeTl) return false;
-      if (src === 'yahoo' && !includeYahoo) return false;
       if (src === 'mc' && !includeMc) return false;
       return true;
     });

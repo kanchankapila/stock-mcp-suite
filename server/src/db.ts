@@ -14,8 +14,33 @@ try {
   throw err;
 }
 
+// Simple migration runner: apply SQL files under server/src/db/migrations in order
+function runMigrations(database: any) {
+  try {
+    const here = path.dirname(new URL(import.meta.url).pathname);
+    const migDir = path.resolve(here, 'db', 'migrations');
+    if (!fs.existsSync(migDir)) return;
+    database.exec('CREATE TABLE IF NOT EXISTS schema_migrations(version TEXT PRIMARY KEY, applied_at TEXT)');
+    const applied = new Set<string>(database.prepare('SELECT version FROM schema_migrations').all().map((r: any)=> String(r.version)));
+    const files = fs.readdirSync(migDir).filter(f => /\.sql$/i.test(f)).sort();
+    for (const f of files) {
+      if (applied.has(f)) continue;
+      const sql = fs.readFileSync(path.join(migDir, f), 'utf8');
+      database.exec('BEGIN');
+      database.exec(sql);
+      database.prepare('INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)').run(f, new Date().toISOString());
+      database.exec('COMMIT');
+      logger.info({ migration: f }, 'db_migration_applied');
+    }
+  } catch (err) {
+    logger.error({ err }, 'db_migration_failed');
+    throw err;
+  }
+}
+
 // Create tables
 try {
+  runMigrations(db);
   db.exec(`
 CREATE TABLE IF NOT EXISTS stocks(
   symbol TEXT PRIMARY KEY,
@@ -103,17 +128,7 @@ CREATE TABLE IF NOT EXISTS options_metrics(
   PRIMARY KEY(symbol, date)
 );
 
--- Yahoo cache: store last fetched quote/summary/chart per (symbol,range,interval)
-CREATE TABLE IF NOT EXISTS yahoo_cache(
-  symbol TEXT,
-  range TEXT,
-  interval TEXT,
-  quote TEXT,
-  summary TEXT,
-  chart TEXT,
-  fetched_at TEXT,
-  PRIMARY KEY(symbol, range, interval)
-);
+-- Fundamentals and Yahoo cache removed
 
 -- History of Top Picks snapshots (per day per symbol)
 CREATE TABLE IF NOT EXISTS top_picks_history(
@@ -267,19 +282,7 @@ export function getLatestOptionsBias(symbol: string): number | null {
   }
 }
 
-export function upsertYahooCache(params: { symbol: string, range: string, interval: string, quote: any, summary: any, chart: any }) {
-  try {
-    const stmt = db.prepare(`INSERT INTO yahoo_cache(symbol,range,interval,quote,summary,chart,fetched_at)
-                             VALUES(?,?,?,?,?,?,?)
-                             ON CONFLICT(symbol,range,interval)
-                               DO UPDATE SET quote=excluded.quote, summary=excluded.summary, chart=excluded.chart, fetched_at=excluded.fetched_at`);
-    stmt.run(params.symbol, params.range, params.interval,
-             JSON.stringify(params.quote ?? null), JSON.stringify(params.summary ?? null), JSON.stringify(params.chart ?? null),
-             new Date().toISOString());
-  } catch (err) {
-    logger.warn({ err, symbol: params.symbol }, 'yahoo_cache_upsert_failed');
-  }
-}
+// upsertYahooCache removed
 
 export function listOptionsMetrics(symbol: string, opts?: { days?: number; limit?: number }) {
   try {
@@ -293,4 +296,71 @@ export function listOptionsMetrics(symbol: string, opts?: { days?: number; limit
     logger.warn({ err, symbol, opts }, 'options_metrics_query_failed');
     return [] as Array<{ date: string; pcr: number|null; pvr: number|null; bias: number|null }>;
   }
+}
+
+// upsertFundamentals removed
+
+// fundamentals migration removed
+
+// --- Features + Backtests helpers ---
+export function upsertFeaturesRow(row: { symbol: string; date: string; ret1?: number|null; ret5?: number|null; ret20?: number|null; vol?: number|null; rsi?: number|null; sma20?: number|null; ema50?: number|null; momentum?: number|null; sent_avg?: number|null; pcr?: number|null; pvr?: number|null }) {
+  try {
+    const stmt = db.prepare(`INSERT INTO features(symbol,date,ret1,ret5,ret20,vol,rsi,sma20,ema50,momentum,sent_avg,pcr,pvr)
+                             VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                             ON CONFLICT(symbol,date) DO UPDATE SET
+                               ret1=excluded.ret1, ret5=excluded.ret5, ret20=excluded.ret20,
+                               vol=excluded.vol, rsi=excluded.rsi, sma20=excluded.sma20, ema50=excluded.ema50,
+                               momentum=excluded.momentum, sent_avg=excluded.sent_avg, pcr=excluded.pcr, pvr=excluded.pvr`);
+    stmt.run(row.symbol, row.date, row.ret1 ?? null, row.ret5 ?? null, row.ret20 ?? null, row.vol ?? null, row.rsi ?? null, row.sma20 ?? null, row.ema50 ?? null, row.momentum ?? null, row.sent_avg ?? null, row.pcr ?? null, row.pvr ?? null);
+  } catch (err) {
+    logger.warn({ err, symbol: row.symbol }, 'features_upsert_failed');
+  }
+}
+
+export function insertBacktestRun(row: { id: string; status: string; cfg: any; metrics?: any; equity?: any }) {
+  try {
+    const stmt = db.prepare(`INSERT INTO backtests(id,status,cfg,metrics,equity,created_at,updated_at)
+                             VALUES(?,?,?,?,?,?,?)
+                             ON CONFLICT(id) DO UPDATE SET status=excluded.status, metrics=excluded.metrics, equity=excluded.equity, updated_at=excluded.updated_at`);
+    const now = new Date().toISOString();
+    stmt.run(row.id, row.status, JSON.stringify(row.cfg||{}), JSON.stringify(row.metrics||null), JSON.stringify(row.equity||null), now, now);
+  } catch (err) {
+    logger.warn({ err, id: row.id }, 'backtest_insert_failed');
+  }
+}
+
+export function getBacktestRun(id: string): any | null {
+  try {
+    const row = db.prepare(`SELECT id,status,cfg,metrics,equity,created_at,updated_at FROM backtests WHERE id=?`).get(id);
+    if (!row) return null;
+    try {
+      row.cfg = row.cfg ? JSON.parse(String(row.cfg)) : null;
+      row.metrics = row.metrics ? JSON.parse(String(row.metrics)) : null;
+      row.equity = row.equity ? JSON.parse(String(row.equity)) : null;
+    } catch {}
+    return row;
+  } catch (err) { return null; }
+}
+
+export function listNewsSince(symbol: string, cutoffIso: string) {
+  try {
+    const stmt = db.prepare(`SELECT id, symbol, date, title, summary, url, sentiment FROM news WHERE symbol=? AND date>=? ORDER BY date ASC`);
+    return stmt.all(symbol, cutoffIso);
+  } catch (err) { return []; }
+}
+
+export function upsertTlCache(tlid: string, kind: 'sma'|'adv', data: any) {
+  try {
+    const stmt = db.prepare(`INSERT INTO tl_cache(tlid,kind,data,updated_at) VALUES(?,?,?,?)
+      ON CONFLICT(tlid,kind) DO UPDATE SET data=excluded.data, updated_at=excluded.updated_at`);
+    stmt.run(tlid, kind, JSON.stringify(data ?? null), new Date().toISOString());
+  } catch (err) { logger.warn({ err, tlid, kind }, 'tl_cache_upsert_failed'); }
+}
+
+export function getTlCache(tlid: string, kind: 'sma'|'adv'): any | null {
+  try {
+    const row = db.prepare(`SELECT data FROM tl_cache WHERE tlid=? AND kind=?`).get(tlid, kind);
+    if (!row) return null;
+    try { return JSON.parse(String(row.data)); } catch { return null; }
+  } catch (err) { return null; }
 }

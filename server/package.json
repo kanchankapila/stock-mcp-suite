@@ -6,6 +6,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p .",
     "start": "node dist/index.js",
+    "test:fixtures": "node scripts/run-tests.cjs",
     "docs:diagrams": "mmdc -i ../docs/diagrams/current.mmd -o ../docs/diagrams/current.svg && mmdc -i ../docs/diagrams/current.mmd -o ../docs/diagrams/current.png && mmdc -i ../docs/diagrams/recommended.mmd -o ../docs/diagrams/recommended.svg && mmdc -i ../docs/diagrams/recommended.mmd -o ../docs/diagrams/recommended.png",
     "rag:reindex": "tsx scripts/rag-reindex.ts",
     "rag:migrate": "tsx scripts/rag-migrate.ts",

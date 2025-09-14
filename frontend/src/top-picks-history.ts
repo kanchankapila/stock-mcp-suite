@@ -8,10 +8,16 @@ import { Api } from './app/services/api.service';
   card.className = 'card';
   card.id = 'topPicksHistory';
   card.style.marginTop = '12px';
+  // Hide by default; main page router will show it on Market Overview
+  (card as HTMLElement).style.display = 'none';
   card.innerHTML = `
     <div class="muted">Top Picks History</div>
     <div class="flex" style="gap:8px; margin-top:6px; align-items:center">
       <input id="tphDays" type="number" min="1" step="1" value="7" style="width:120px" aria-label="History lookback (days)" />
+      <label class="muted">Limit:</label>
+      <input id="tphLimit" type="number" min="1" step="1" value="10" style="width:90px" aria-label="Limit per day" />
+      <label class="muted">Filter:</label>
+      <input id="tphSearch" placeholder="symbol…" style="width:140px" aria-label="Filter symbol" />
       <button id="tphRefresh" class="btn-sm">Refresh</button>
       <span id="tphHint" class="muted"></span>
     </div>
@@ -19,6 +25,12 @@ import { Api } from './app/services/api.service';
   `;
   const after = document.getElementById('topPicks') || document.getElementById('marketOverview') || container.firstChild as Element | null;
   container.insertBefore(card, after ? after.nextSibling : null);
+  // If currently on overview, make it visible now
+  try {
+    const h = (location.hash || '').toLowerCase();
+    const isOverview = h.startsWith('#/overview') || h === '' || h === '#/';
+    (card as HTMLElement).style.display = isOverview ? '' : 'none';
+  } catch {}
 })();
 
 (function initTopPicksHistory(){
@@ -26,6 +38,8 @@ import { Api } from './app/services/api.service';
   const hint = document.getElementById('tphHint');
   const btn = document.getElementById('tphRefresh');
   const daysEl = document.getElementById('tphDays') as HTMLInputElement | null;
+  const limitEl = document.getElementById('tphLimit') as HTMLInputElement | null;
+  const searchEl = document.getElementById('tphSearch') as HTMLInputElement | null;
   if (!body || !btn) return;
   function computeRankChanges(data: Array<{ snapshot_date:string, symbol:string, score:number }>) {
     const byDate = new Map<string, Array<{symbol:string, score:number}>>();
@@ -62,6 +76,9 @@ import { Api } from './app/services/api.service';
     (body as HTMLElement).innerHTML = '<span class="spinner"></span>Loading.';
     const n = daysEl ? Number(daysEl.value || 0) : 7;
     const days = (Number.isFinite(n) && n>0) ? n : 7;
+    const l = limitEl ? Number(limitEl.value || 10) : 10;
+    const limit = (Number.isFinite(l) && l>0) ? l : 10;
+    const search = (searchEl?.value || '').trim().toUpperCase();
     try {
       const res = await fetch(`/api/top-picks/history?days=${encodeURIComponent(String(days))}`).then(r=>r.json());
       const arr: Array<any> = res?.data || [];
@@ -69,7 +86,10 @@ import { Api } from './app/services/api.service';
       const grouped = computeRankChanges(compact);
       if (!grouped.length) { (body as HTMLElement).innerHTML = '<div class="muted">No history yet. Snapshot will be created automatically on startup.</div>'; return; }
       const sections = grouped.reverse().map(g => {
-        const rows = g.rows.map(r => {
+        const rows = g.rows
+          .filter(r => !search || String(r.symbol).toUpperCase().includes(search))
+          .slice(0, limit)
+          .map(r => {
           const arrow = (r.delta===null) ? '' : (r.delta>0 ? '▲' : (r.delta<0 ? '▼' : '•'));
           const delta = (r.delta===null) ? '' : ` (${r.delta>0?'+':''}${r.delta})`;
           return `<tr>
@@ -77,21 +97,26 @@ import { Api } from './app/services/api.service';
             <td style="padding:4px; text-align:right">${r.rank}${delta} ${arrow}</td>
             <td style="padding:4px; text-align:right">${r.score.toFixed(3)}</td>
           </tr>`;
-        }).join('');
+          }).join('');
         return `<div class="card" style="margin-top:8px"><div class="muted">${g.date}</div>
           <table style="width:100%; border-collapse:collapse; margin-top:6px">
-            <tr><th style="text-align:left; padding:4px">Symbol</th><th style="text-align:right; padding:4px">Rank Δ</th><th style="text-align:right; padding:4px">Score</th></tr>
+            <tr><th style="text-align:left; padding:4px">Symbol</th><th style="text-align:right; padding:4px">Rank ?</th><th style="text-align:right; padding:4px">Score</th></tr>
             ${rows}
           </table>
         </div>`;
       }).join('');
       (body as HTMLElement).innerHTML = sections;
-      if (hint) (hint as HTMLElement).textContent = `days=${days}`;
+      if (hint) (hint as HTMLElement).textContent = `days=${days}, limit=${limit}${search?`, filter=${search}`:''}`;
     } catch (e:any) {
       (body as HTMLElement).innerHTML = `<div class="mono" style="color:#ff6b6b">${String(e?.message || e)}</div>`;
     }
   }
   btn?.addEventListener('click', render);
+  try {
+    limitEl?.addEventListener('change', render);
+    searchEl?.addEventListener('input', () => setTimeout(render, 50));
+  } catch {}
   render();
 })();
+
 

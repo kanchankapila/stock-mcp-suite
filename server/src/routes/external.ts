@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { etGetAllIndices, etSectorPerformance, etIndexConstituents, mcPriceVolume, mcStockHistory, tickertapeMmiNow, marketsMojoValuationMeter, mcChartInfo, mcPriceForecast, mcFnoExpiries, mcTechRsi } from '../providers/external.js';
 import { tlAdvTechnical, tlSmaChart, tlDerivativeBuildup, tlHeatmap, getTrendlyneCookieStatus, getTrendlyneCookieDetails, normalizeAdvTechnical } from '../providers/trendlyne.js';
+import { getTlCache, upsertTlCache } from '../db.js';
 import fetch from 'node-fetch';
 import { refreshTrendlyneCookieHeadless } from '../providers/trendlyneHeadless.js';
 import { resolveTicker, findStockEntry } from '../utils/ticker.js';
@@ -92,28 +93,40 @@ router.get('/trendlyne/adv-tech', asyncHandler(async (req, res) => {
   const input = String(req.query.symbol || '');
   const tlid = String(req.query.tlid || '');
   const lookback = req.query.lookback ? Number(req.query.lookback) : 24;
+  const force = String(req.query.force || '').toLowerCase() === 'true';
   let id = tlid;
   if (!id && input) {
     const base = input.includes('.') ? input.split('.')[0] : input;
     try { id = resolveTicker(base, 'trendlyne'); } catch { id = ''; }
   }
   if (!id) return res.status(400).json({ ok:false, error: 'tlid or symbol required' });
+  // Fast path: serve cached normalized ADV if present and not forced
+  if (!force) {
+    try {
+      const cached = getTlCache(id, 'adv');
+      if (cached) return res.json({ ok: true, data: cached, cached: true });
+    } catch {}
+  }
   // Public unauthenticated fetch for Advanced Technicals (no cookie handling)
   const url = `https://trendlyne.com/equity/api/stock/adv-technical-analysis/${encodeURIComponent(id)}/${encodeURIComponent(String(isFinite(lookback) && lookback > 0 ? lookback : 24))}/`;
   try {
+    // Add a short timeout to avoid hanging
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), 5000);
     const resp = await fetch(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
         'Accept': 'application/json,text/plain,*/*',
         'Referer': 'https://trendlyne.com/'
-      }
-    } as any);
+      },
+      signal: ctrl.signal
+    } as any).finally(() => clearTimeout(to));
     if (!resp.ok) return res.status(resp.status).json({ ok:false, error: `trendlyne_${resp.status}` });
     const adv = await resp.json().catch(()=>null);
-    // Optionally include a lightweight SMA for the card sparkline
-    const sma = await tlSmaChart(id).catch(()=>null);
     const normalized = adv ? normalizeAdvTechnical(adv) : null;
-    return res.json({ ok: true, data: { tlid: id, adv, sma, normalized } });
+    const payload = { tlid: id, adv, normalized };
+    try { upsertTlCache(id, 'adv', payload); } catch {}
+    return res.json({ ok: true, data: payload });
   } catch (err) {
     return res.status(502).json({ ok:false, error: 'trendlyne_adv_fetch_failed' });
   }
@@ -154,8 +167,9 @@ router.get('/trendlyne/sma', asyncHandler(async (req, res) => {
   try {
     let sma = await tlSmaChart(id).catch(()=>null);
     if (!sma || (Array.isArray((sma as any)?.data) && !(sma as any).data.length)) {
-      // Retry via headless cookie refresh if creds are present
-      if (process.env.TRENDLYNE_EMAIL && process.env.TRENDLYNE_PASSWORD) {
+      // Optional: Retry via headless cookie refresh ONLY if explicitly requested (?force=true)
+      const force = String(req.query.force || '').toLowerCase() === 'true';
+      if (force && process.env.TRENDLYNE_EMAIL && process.env.TRENDLYNE_PASSWORD) {
         try { await refreshTrendlyneCookieHeadless(); } catch {}
         sma = await tlSmaChart(id).catch(()=>null);
       }

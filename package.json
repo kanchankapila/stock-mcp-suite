@@ -3,9 +3,22 @@
   "private": true,
   "scripts": {
     "dev": "node scripts/start-all.js",
-    "start:all": "node scripts/start-all.js"
+    "start:all": "node scripts/start-all.js",
+    "dev:server": "npm --prefix server run dev",
+    "dev:frontend": "npm --prefix frontend start",
+    "dev:ml": "python -m uvicorn app:app --host 0.0.0.0 --port 5001 --app-dir ml-svc",
+    "dev:redis": "node scripts/start-redis.cjs",
+    "dev:all": "node scripts/dev-all.cjs",
+    "dev:all:ps": "powershell -ExecutionPolicy Bypass -File scripts/dev-all.ps1",
+    "bootstrap": "node scripts/bootstrap.cjs",
+    "start:prod": "node scripts/start-prod.cjs",
+    "db:schema": "node server/scripts/schema-dump.cjs",
+    "db:counts": "node server/scripts/table-counts.cjs",
+    "test:fixtures": "npm --prefix server run test:fixtures",
+    "yfinance:all": "python server/scripts/yfinance_fetch.py --all --period=6mo --interval=1d"
   },
   "dependencies": {
+    "bullmq": "^5.58.5",
     "chart.js": "^4.5.0"
   }
 }
