@@ -55,7 +55,7 @@ Currently, no authentication is required. All endpoints are publicly accessible.
 
 #### Get Stock Overview
 ```http
-GET /api/stocks/overview/:symbol
+GET /api/stocks/:symbol/overview
 ```
 
 **Parameters:**
@@ -79,7 +79,7 @@ GET /api/stocks/overview/:symbol
 
 #### Get Stock History
 ```http
-GET /api/stocks/history/:symbol?days=30
+GET /api/stocks/:symbol/history?days=30
 ```
 
 **Parameters:**
@@ -138,7 +138,7 @@ POST /api/stocks/ingest/:symbol
 
 #### Get Stock News
 ```http
-GET /api/stocks/news/:symbol?limit=10
+GET /api/stocks/:symbol/news?limit=10
 ```
 
 **Parameters:**
@@ -237,6 +237,107 @@ GET /api/stocks/predict/:symbol
   }
 }
 ```
+
+### Options / Derivatives Metrics
+
+Returns Put/Call ratios and computed bias (if available) for a symbol.
+```http
+GET /api/stocks/:symbol/options-metrics?days=60&limit=90
+```
+Response:
+```json
+{
+  "ok": true,
+  "data": {
+    "latest": { "date": "2025-09-12", "pcr": 0.92, "pvr": 1.05, "bias": 0.18 },
+    "history": [ { "date": "2025-09-01", "pcr": 0.88, "pvr": 1.10, "bias": 0.12 } ]
+  }
+}
+```
+
+### Portfolio
+
+```http
+GET /api/portfolio               # List holdings with PnL snapshot
+POST /api/portfolio/add          # Body: { symbol, buyDate, buyPrice, quantity }
+GET /api/portfolio/summary       # Aggregate invested/current/pnl
+GET /api/portfolio/performance   # Time series cumulative invested vs current value
+```
+Response example (GET /api/portfolio):
+```json
+{
+  "ok": true,
+  "data": [
+    {
+      "id": 1,
+      "symbol": "AAPL",
+      "buy_date": "2025-09-01",
+      "buy_price": 175.5,
+      "quantity": 10,
+      "currentPrice": 178.2,
+      "invested": 1755,
+      "currentValue": 1782,
+      "pnl": 27,
+      "pnlPct": 1.54
+    }
+  ]
+}
+```
+
+### Watchlist
+```http
+GET /api/watchlist        # Symbols added
+POST /api/watchlist/add   # Body: { symbol }
+GET /api/defaultWatchlist # Predefined indices & sector representatives
+```
+
+### Alerts
+```http
+GET /api/alerts?limit=100
+```
+(Write endpoint TBD; current implementation lists stored alert triggers.)
+
+### RSS News (Supplemental)
+```http
+GET /api/rss?limit=50
+```
+
+### Provider Data (Generic Capture)
+```http
+GET /api/provider-data/:symbol?provider=trendlyne&limit=20
+```
+Returns raw JSON payload snapshots ingested for flexible new providers.
+
+### Indices & Sectors (Preview)
+```http
+GET /api/indices
+GET /api/sectors
+```
+Lightweight placeholder aggregation; subject to change.
+
+### Market Status
+```http
+GET /api/marketStatus
+```
+Response:
+```json
+{
+  "ok": true,
+  "data": {
+    "istIso": "2025-09-14T07:05:12.345Z",
+    "status": "CLOSED",
+    "isOpen": false,
+    "nextOpen": "2025-09-15T03:45:00.000Z",
+    "nextClose": null
+  }
+}
+```
+
+### F&O (Alias) Metrics
+```http
+GET /api/fo/:symbol
+```
+Equivalent to options metrics convenience alias.
 
 ### Top Picks
 
@@ -688,3 +789,7 @@ ws://localhost:4010/ws
 ---
 
 *This API reference provides comprehensive documentation for all available endpoints. For additional help or examples, refer to the setup guide or create an issue on GitHub.*
+
+### Deprecations / Removed
+- Yahoo ingestion & WebSocket quote streaming endpoints removed (legacy Yahoo provider retired).
+- Any previously documented `/api/stocks/yahoo/*` routes should be considered deprecated.

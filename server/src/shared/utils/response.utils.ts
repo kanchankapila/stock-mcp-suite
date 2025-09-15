@@ -41,44 +41,32 @@ export class ResponseUtils {
     };
   }
 
-  public static notFound(resource: string): ApiResponse {
-    return {
-      ok: false,
-      error: `${resource} not found`,
-      message: `The requested ${resource} could not be found`
-    };
+  public static notFound(resource = 'resource'): ApiResponse {
+    return { ok: false, error: 'Not Found', message: `${resource} not found` };
   }
 
   public static unauthorized(message = 'Unauthorized'): ApiResponse {
-    return {
-      ok: false,
-      error: 'Unauthorized',
-      message
-    };
+    return { ok: false, error: 'Unauthorized', message };
   }
 
   public static forbidden(message = 'Forbidden'): ApiResponse {
-    return {
-      ok: false,
-      error: 'Forbidden',
-      message
-    };
+    return { ok: false, error: 'Forbidden', message };
   }
 
-  public static rateLimited(message = 'Rate limit exceeded'): ApiResponse {
-    return {
-      ok: false,
-      error: 'Rate limit exceeded',
-      message
-    };
+  public static rateLimited(message = 'Too Many Requests'): ApiResponse {
+    return { ok: false, error: 'Rate Limited', message };
   }
 
-  public static internalError(message = 'Internal server error'): ApiResponse {
-    return {
-      ok: false,
-      error: 'Internal server error',
-      message
-    };
+  public static internalError(message = 'Internal Server Error'): ApiResponse {
+    return { ok: false, error: 'Internal Error', message };
+  }
+
+  public static created<T>(data: T, message = 'Created'): ApiResponse<T> {
+    return { ok: true, data, message };
+  }
+
+  public static noContent(message = 'No Content'): ApiResponse {
+    return { ok: true, message };
   }
 
   public static paginated<T>(
@@ -96,6 +84,15 @@ export class ResponseUtils {
         limit,
         pages: Math.ceil(total / limit)
       }
+    };
+  }
+
+  public static paginate<T>(items: T[], total: number, page: number, limit: number, message?: string): ApiResponse<T[]> {
+    return {
+      ok: true,
+      data: items,
+      message,
+      meta: { total, page, limit }
     };
   }
 }

@@ -8,6 +8,7 @@ import { fetchNews, parseNews } from '../providers/news.js';
 import { fetchMcInsights } from '../providers/moneycontrol.js';
 import { resolveTicker } from '../utils/ticker.js';
 import { indexNamespace as lcIndex, answer as lcAnswer, retrieve as lcRetrieve } from '../rag/langchain.js';
+import { ingestionManager } from '../providers/IngestionManager.js';
 
 function parseIntent(prompt: string) {
   const p = prompt.toLowerCase();
@@ -43,18 +44,16 @@ export async function agentAnswer(prompt: string, explicitSymbol?: string) {
   // On-demand ingest pipeline
   if (wantIngest) {
     const sym = symbol;
-    const newsQuery = resolveTicker(symbol, 'news');
-    const rows = await fetchStooqDaily(sym);
-    rows.forEach(r => insertPriceRow(r));
-    const NA = process.env.NEWS_API_KEY;
-    const newsJson = await fetchNews(newsQuery, NA);
-    const news = parseNews(sym, newsJson);
-    for (const n of news) {
-      const s = sentimentScore([`${n.title}. ${n.summary}`]);
-      insertNewsRow({ id: n.id, symbol: sym, date: n.date, title: n.title, summary: n.summary, url: n.url, sentiment: s });
+    // Use new ingestion pipeline (alphavantage + newsapi) instead of manual fetch
+    try {
+      const alphaRes = await ingestionManager.run({ providerId: 'alphavantage', symbols: [sym] });
+      const newsRes = await ingestionManager.run({ providerId: 'newsapi', symbols: [sym], rag: true });
+      const pc = alphaRes.prices?.length || 0;
+      const nc = newsRes.news?.length || 0;
+      messages.push(`Ingest pipeline: prices=${pc}, news=${nc}`);
+    } catch (err:any) {
+      messages.push(`Ingest error: ${String(err?.message||err)}`);
     }
-    upsertStock(sym, symbol);
-    messages.push(`Ingested: prices=${rows.length}, news=${news.length}`);
   }
 
   const prices = (await listPrices(symbol, 500)) as any[];

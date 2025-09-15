@@ -11,6 +11,7 @@ import { refreshTrendlyneCookieHeadless } from '../providers/trendlyneHeadless.j
 import { tlSmaChart, tlAdvTechnical } from '../providers/trendlyne.js';
 import { upsertTlCache } from '../db.js';
 import crypto from 'crypto';
+import { evaluateAlerts } from '../services/alertsEvaluator.js';
 
 type Bull = typeof import('bullmq');
 
@@ -37,6 +38,7 @@ export async function startBullJobs(): Promise<{ enabled: boolean; note?: string
       tl: new bull.Queue('ingest:tl', connection),
       rag: new bull.Queue('rag:reindex', connection),
       top: new bull.Queue('top-picks:snapshot', connection),
+      alerts: new bull.Queue('alerts:eval', connection),
     };
     const schedulers: Record<string, any> = {};
     const BATCH = Math.max(1, Number(process.env.JOB_BATCH || 20));
@@ -157,12 +159,18 @@ export async function startBullJobs(): Promise<{ enabled: boolean; note?: string
         } catch (err) { logger.warn({ err }, 'top_picks_snapshot_failed'); }
         tickMetric('top-picks:snapshot', Date.now() - t0);
       }, { ...connection, concurrency: Number(process.env.JOB_CONCURRENCY_TOP || 1) }),
+      alerts: new bull.Worker('alerts:eval', async () => {
+        const t0 = Date.now();
+        try { await evaluateAlerts(); } catch (err) { logger.warn({ err }, 'alerts_eval_failed'); }
+        tickMetric('alerts:eval', Date.now() - t0);
+      }, { ...connection, concurrency: 1 }),
     };
 
     const CRON_PRICES = process.env.CRON_PRICES || '0 */2 * * *';
     const CRON_NEWS = process.env.CRON_NEWS || '15 */2 * * *';
     const CRON_TRENDLYNE = process.env.CRON_TRENDLYNE || '30 */4 * * *';
     const CRON_RAG = process.env.CRON_RAG || '0 */6 * * *';
+    const CRON_ALERTS = process.env.CRON_ALERTS || '*/5 * * * *';
 
     const attempts = Number(process.env.JOB_ATTEMPTS || 2);
     const backoff = Number(process.env.JOB_BACKOFF_MS || 500);
@@ -172,6 +180,7 @@ export async function startBullJobs(): Promise<{ enabled: boolean; note?: string
     await queues.tl.add('tick', {}, { repeat: { cron: CRON_TRENDLYNE }, ...jobOpts });
     await queues.rag.add('tick', {}, { repeat: { cron: CRON_RAG }, ...jobOpts });
     await queues.top.add('tick', {}, { repeat: { cron: '5 18 * * *' }, ...jobOpts });
+    await queues.alerts.add('tick', {}, { repeat: { cron: CRON_ALERTS }, ...jobOpts });
 
     // Nightly feature build
     const featuresQ = new bull.Queue('features:build', connection);
@@ -230,7 +239,7 @@ export function bullStatus() {
   return { enabled: ENABLE_JOBS, active: !!refs, queues: refs ? Object.keys(refs.queues) : [] };
 }
 
-export async function enqueueJob(queueName: 'ingest:prices'|'ingest:news'|'ingest:tl'|'rag:reindex'|'top-picks:snapshot'|'features:build', data: any = {}) {
+export async function enqueueJob(queueName: 'ingest:prices'|'ingest:news'|'ingest:tl'|'rag:reindex'|'top-picks:snapshot'|'features:build'|'alerts:eval', data: any = {}) {
   if (!refs) throw new Error('jobs_not_initialized');
   const q = refs.queues?.[queueName];
   if (!q) throw new Error(`queue_not_found:${queueName}`);

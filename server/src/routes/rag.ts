@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { asyncHandler } from '../utils/asyncHandler.js';
-import { indexNamespace, retrieve as lcRetrieve, answer as lcAnswer, answerSSE, ragStatsAll, ragStatsDetail } from '../rag/langchain.js';
+import { indexNamespace, retrieve as lcRetrieve, answer as lcAnswer, answerSSE, ragStatsAll, ragStatsDetail, getStoreKind, deleteDocs } from '../rag/langchain.js';
 import { loadStocklist } from '../utils/stocklist.js';
 import { resolveTicker } from '../utils/ticker.js';
 import db from '../db.js';
@@ -32,14 +32,15 @@ router.post('/index', asyncHandler(async (req, res) => {
 }));
 
 router.post('/query', asyncHandler(async (req, res) => {
-  const { namespace, query, k, withAnswer, dateCutoff } = req.body || {};
+  const { namespace, query, k, withAnswer, dateCutoff, minScore } = req.body || {};
   if (!namespace || !query) return res.status(400).json({ ok:false, error: 'namespace and query required' });
   try {
+    const opts = { dateCutoff: dateCutoff ? String(dateCutoff) : undefined, minScore: typeof minScore === 'number' ? Number(minScore) : undefined };
     if (withAnswer) {
-      const out = await lcAnswer(String(namespace), String(query), Number(k||5), { dateCutoff: dateCutoff ? String(dateCutoff) : undefined });
+      const out = await lcAnswer(String(namespace), String(query), Number(k||5), opts);
       return res.json({ ok:true, ...out });
     }
-    const docs = await lcRetrieve(String(namespace), String(query), Number(k||5), { dateCutoff: dateCutoff ? String(dateCutoff) : undefined });
+    const docs = await lcRetrieve(String(namespace), String(query), Number(k||5), opts);
     return res.json({ ok:true, hits: docs.map(d=>({ text: d.pageContent, metadata: d.metadata })) });
   } catch (err: any) {
     // Return a 400 with detail to aid debugging instead of a masked 500
@@ -49,14 +50,14 @@ router.post('/query', asyncHandler(async (req, res) => {
 
 // SSE streaming answer
 router.post('/stream', asyncHandler(async (req, res) => {
-  const { namespace, query, k } = req.body || {};
+  const { namespace, query, k, dateCutoff, minScore } = req.body || {};
   if (!namespace || !query) return res.status(400).json({ ok:false, error: 'namespace and query required' });
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders?.();
   const send = (ev: string, data: any) => { res.write(`event: ${ev}\n`); res.write(`data: ${JSON.stringify(data)}\n\n`); };
-  await answerSSE(String(namespace), String(query), Number(k||5), ({type, data}) => send(type, data));
+  await answerSSE(String(namespace), String(query), Number(k||5), ({type, data}) => send(type, data), { dateCutoff: dateCutoff ? String(dateCutoff) : undefined, minScore: typeof minScore === 'number' ? Number(minScore) : undefined });
   res.end();
 }));
 
@@ -190,14 +191,29 @@ router.post('/reindex/:symbol', asyncHandler(async (req, res) => {
   res.json({ ok:true, added: out.added, cutoff });
 }));
 
-// List RAG docs for a namespace
+// List RAG docs for a namespace (sqlite-backed only). Supports pagination (after cursor) and text query.
 router.get('/docs/:ns', asyncHandler(async (req, res) => {
   const ns = String(req.params.ns || '').toUpperCase();
+  const storeKind = getStoreKind();
   const limit = req.query.limit ? Number(req.query.limit) : 100;
   const withText = String(req.query.withText ?? 'false').toLowerCase() === 'true';
-  const rows = db.prepare(`SELECT id, text, metadata FROM rag_embeddings WHERE ns=? ORDER BY id DESC LIMIT ?`).all(ns, Math.max(1, Math.min(1000, limit))) as Array<{id:string, text?:string, metadata:string}>;
+  const after = req.query.after ? String(req.query.after) : undefined; // cursor = last id from previous page
+  const q = req.query.q ? String(req.query.q) : '';
+  if (storeKind !== 'sqlite') {
+    // For non-sqlite stores, rely on stats only for now
+    const stats = await ragStatsDetail(ns).catch(()=>null);
+    return res.json({ ok:true, storeKind, data: [], stats, note: 'listing_only_supported_for_sqlite_store' });
+  }
+  const clauses: string[] = ['ns=?'];
+  const params: any[] = [ns];
+  if (after) { clauses.push('id < ?'); params.push(after); }
+  if (q) { clauses.push('(text LIKE ? OR metadata LIKE ?)'); params.push(`%${q}%`, `%${q}%`); }
+  const sql = `SELECT id, text, metadata FROM rag_embeddings WHERE ${clauses.join(' AND ')} ORDER BY id DESC LIMIT ?`; params.push(Math.max(1, Math.min(1000, limit)));
+  const rows = db.prepare(sql).all(...params) as Array<{id:string, text?:string, metadata:string}>;
   const data = rows.map(r => { try { const md = JSON.parse(r.metadata||'{}'); const excerpt = withText ? String(r.text||'').slice(0,160) : undefined; return { id: r.id, date: md?.date || null, source: md?.source || null, excerpt }; } catch { return { id: r.id, date: null, source: null }; } });
-  res.json({ ok:true, data });
+  const nextCursor = rows.length === Math.max(1, Math.min(1000, limit)) ? rows[rows.length-1].id : null;
+  const stats = await ragStatsDetail(ns).catch(()=>null);
+  res.json({ ok:true, storeKind, data, nextCursor, stats });
 }));
 
 // URL status list per namespace
@@ -207,8 +223,9 @@ router.get('/url-status/:ns', asyncHandler(async (req, res) => {
   res.json({ ok:true, data: rows });
 }));
 
-// Reset namespace: delete all embeddings and URL status for this ns
+// Reset namespace: delete all embeddings and URL status for this ns (requires confirm=1)
 router.delete('/ns/:ns', asyncHandler(async (req, res) => {
+  if (String(req.query.confirm) !== '1') return res.status(400).json({ ok:false, error: 'confirm=1 required' });
   const ns = String(req.params.ns || '').toUpperCase();
   try {
     const delE = db.prepare(`DELETE FROM rag_embeddings WHERE ns=?`);
@@ -271,6 +288,16 @@ router.post('/admin/migrate', asyncHandler(async (_req, res) => {
   } catch (err:any) {
     res.status(400).json({ ok:false, error: String(err?.message || err) });
   }
+}));
+
+// Batch delete docs by metadata filters (source, before date). Only implemented for sqlite/memory/hnsw.
+router.delete('/docs/:ns', asyncHandler(async (req, res) => {
+  const ns = String(req.params.ns || '').toUpperCase();
+  const source = req.query.source ? String(req.query.source) : undefined;
+  const before = req.query.before ? String(req.query.before) : undefined; // YYYY-MM-DD delete strictly earlier
+  if (!source && !before) return res.status(400).json({ ok:false, error: 'at_least_one_filter_required (source or before)' });
+  const out = await deleteDocs(ns, { source, before });
+  res.json({ ok:true, ...out });
 }));
 
 // RAG stats: list namespaces with counts, and optional per-namespace detail

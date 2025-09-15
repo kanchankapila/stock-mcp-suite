@@ -2,8 +2,8 @@
  * Base service class with common functionality
  */
 
-import { ResponseUtils, ApiResponse } from '../utils/response.utils';
-import { ValidationUtils } from '../utils/validation.utils';
+import { ResponseUtils, ApiResponse } from '../utils/response.utils.js';
+import { ValidationUtils } from '../utils/validation.utils.js';
 import { logger } from '../../utils/logger.js';
 
 export abstract class BaseService {

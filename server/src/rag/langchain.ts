@@ -306,32 +306,54 @@ export async function indexNamespace(ns: Namespace, input: { urls?: string[], te
   return { added: chunks.length };
 }
 
-export async function retrieve(ns: Namespace, query: string, k = 5, opts?: { dateCutoff?: string }) {
+export function getStoreKind() { return STORE_KIND; }
+
+export async function retrieve(ns: Namespace, query: string, k = 5, opts?: { dateCutoff?: string, minScore?: number }) {
   const cutoff = opts?.dateCutoff ? String(opts.dateCutoff) : '';
+  const minScore = typeof opts?.minScore === 'number' ? opts!.minScore : undefined;
   if (STORE_KIND === 'memory') {
     const store = await ensureNamespace(ns) as MemoryVectorStore;
-    const retriever = store.asRetriever(k);
-    const docs = await retriever.invoke(query);
-    if (!cutoff) return docs;
-    const out = docs.filter(d => {
-      const dstr = String((d.metadata as any)?.date || '');
-      return !cutoff || (dstr && dstr >= cutoff);
-    });
-    return out.slice(0, k);
+    try {
+      // Prefer similaritySearchWithScore to capture scores
+      const pairs = await (store as any).similaritySearchWithScore?.(query, k * 2) || [];
+      let docs = pairs.map((p: any) => { const [d, s] = p; (d.metadata as any)._score = s; return d; });
+      if (!pairs.length) {
+        const retriever = store.asRetriever(k);
+        docs = await retriever.invoke(query);
+      }
+      if (cutoff) docs = docs.filter(d => { const dstr = String((d.metadata as any)?.date || ''); return !cutoff || (dstr && dstr >= cutoff); });
+      if (minScore !== undefined) docs = docs.filter(d => (d.metadata as any)?._score === undefined || (d.metadata as any)._score >= minScore);
+      return docs.slice(0, k);
+    } catch {
+      const retriever = store.asRetriever(k);
+      let docs = await retriever.invoke(query);
+      if (cutoff) docs = docs.filter(d => { const dstr = String((d.metadata as any)?.date || ''); return !cutoff || (dstr && dstr >= cutoff); });
+      if (minScore !== undefined) docs = docs.filter(d => (d.metadata as any)?._score === undefined || (d.metadata as any)._score >= minScore);
+      return docs.slice(0, k);
+    }
   }
   if (STORE_KIND === 'hnsw') {
     let store = hnswLoaded.get(ns);
     if (!store) {
       try { const HNSWLib = await getHNSWLib(); store = await HNSWLib.load(nsPath(ns), await getStoreEmbeddings()); hnswLoaded.set(ns, store); } catch { return []; }
     }
-    const retriever = store.asRetriever(k);
-    const docs = await retriever.invoke(query);
-    if (!cutoff) return docs;
-    const out = docs.filter(d => {
-      const dstr = String((d.metadata as any)?.date || '');
-      return !cutoff || (dstr && dstr >= cutoff);
-    });
-    return out.slice(0, k);
+    try {
+      const pairs = await (store as any).similaritySearchWithScore?.(query, k * 2) || [];
+      let docs = pairs.map((p: any) => { const [d, s] = p; (d.metadata as any)._score = s; return d; });
+      if (!pairs.length) {
+        const retriever = store.asRetriever(k);
+        docs = await retriever.invoke(query);
+      }
+      if (cutoff) docs = docs.filter(d => { const dstr = String((d.metadata as any)?.date || ''); return !cutoff || (dstr && dstr >= cutoff); });
+      if (minScore !== undefined) docs = docs.filter(d => (d.metadata as any)?._score === undefined || (d.metadata as any)._score >= minScore);
+      return docs.slice(0, k);
+    } catch {
+      const retriever = store.asRetriever(k);
+      let docs = await retriever.invoke(query);
+      if (cutoff) docs = docs.filter(d => { const dstr = String((d.metadata as any)?.date || ''); return !cutoff || (dstr && dstr >= cutoff); });
+      if (minScore !== undefined) docs = docs.filter(d => (d.metadata as any)?._score === undefined || (d.metadata as any)._score >= minScore);
+      return docs.slice(0, k);
+    }
   }
   if (STORE_KIND === 'chroma') {
     let store = chromaLoaded.get(ns);
@@ -343,47 +365,36 @@ export async function retrieve(ns: Namespace, query: string, k = 5, opts?: { dat
         const collectionName = `${prefix}_${ns}`.replace(/[^a-zA-Z0-9_\-]/g, '_');
         store = await Chroma.fromExistingCollection(await getEmbeddingsAsync(), { url, collectionName });
         chromaLoaded.set(ns, store);
-      } catch {
-        return [];
+      } catch { return []; }
+    }
+    try {
+      const pairs = await (store as any).similaritySearchWithScore?.(query, k * 2, cutoff ? { date: { $gte: cutoff } } : undefined) || [];
+      let docs = pairs.map((p: any) => { const [d, s] = p; (d.metadata as any)._score = s; return d; });
+      if (!pairs.length) {
+        const retriever = store.asRetriever(k);
+        docs = await retriever.invoke(query);
       }
+      if (cutoff) docs = docs.filter((d: any) => { const dstr = String((d.metadata as any)?.date || ''); return !cutoff || (dstr && dstr >= cutoff); });
+      if (minScore !== undefined) docs = docs.filter((d: any) => (d.metadata as any)?._score === undefined || (d.metadata as any)._score >= minScore);
+      return docs.slice(0, k);
+    } catch {
+      const retriever = store.asRetriever(k);
+      let docs = await retriever.invoke(query);
+      if (cutoff) docs = docs.filter((d: any) => { const dstr = String((d.metadata as any)?.date || ''); return !cutoff || (dstr && dstr >= cutoff); });
+      if (minScore !== undefined) docs = docs.filter((d: any) => (d.metadata as any)?._score === undefined || (d.metadata as any)._score >= minScore);
+      return docs.slice(0, k);
     }
-    if (cutoff) {
-      try {
-        // Try similaritySearch with metadata filter (Chroma supports where)
-        const anyStore: any = store as any;
-        if (typeof anyStore.similaritySearch === 'function') {
-          return await anyStore.similaritySearch(query, k, { date: { $gte: cutoff } });
-        }
-      } catch {}
-    }
-    const retriever = store.asRetriever(k);
-    const docs = await retriever.invoke(query);
-    if (!cutoff) return docs;
-    const out = docs.filter((d:any) => {
-      const dstr = String((d.metadata as any)?.date || '');
-      return !cutoff || (dstr && dstr >= cutoff);
-    });
-    return out.slice(0, k);
   }
   // sqlite
   const emb = await (await getEmbeddingsAsync()).embedQuery(query);
   const rows = db.prepare(`SELECT id,text,metadata,vector FROM rag_embeddings WHERE ns=?`).all(ns) as Array<{id:string,text:string,metadata:string,vector:string}>;
   const filtered = rows.filter(r => {
-    if (!cutoff) return true;
-    try {
-      const md = JSON.parse(r.metadata || '{}');
-      const dstr = String(md?.date || '');
-      return dstr && dstr >= cutoff;
-    } catch { return false; }
+    if (!cutoff) return true; try { const md = JSON.parse(r.metadata || '{}'); const dstr = String(md?.date || ''); return dstr && dstr >= cutoff; } catch { return false; }
   });
-  const scored = filtered.map(r=>{
-    const v = JSON.parse(r.vector || '[]') as number[];
-    // cosine similarity
-    let dot=0, a=0, b=0; for (let i=0;i<emb.length;i++){ const x=emb[i]||0, y=v[i]||0; dot+=x*y; a+=x*x; b+=y*y; }
-    const sim = dot/((Math.sqrt(a)||1)*(Math.sqrt(b)||1));
-    return { id:r.id, text:r.text, metadata: JSON.parse(r.metadata||'{}'), score: sim };
-  }).sort((x,y)=>y.score-x.score).slice(0,k);
-  return scored.map(s=> new Document({ pageContent: s.text, metadata: s.metadata }));
+  const scored = filtered.map(r=>{ const v = JSON.parse(r.vector || '[]') as number[]; let dot=0,a=0,b=0; for (let i=0;i<emb.length;i++){ const x=emb[i]||0, y=v[i]||0; dot+=x*y; a+=x*x; b+=y*y; } const sim = dot/((Math.sqrt(a)||1)*(Math.sqrt(b)||1)); return { id:r.id, text:r.text, metadata: JSON.parse(r.metadata||'{}'), score: sim }; })
+    .filter(s => minScore === undefined || s.score >= minScore)
+    .sort((x,y)=>y.score-x.score).slice(0,k);
+  return scored.map(s=> { const d = new Document({ pageContent: s.text, metadata: { ...s.metadata, _score: s.score } }); return d; });
 }
 
 function formatDocs(docs: Document[]) {
@@ -392,7 +403,7 @@ ${d.pageContent}
 `).join('\n\n');
 }
 
-export async function answer(ns: Namespace, question: string, k = 5, opts?: { dateCutoff?: string }) {
+export async function answer(ns: Namespace, question: string, k = 5, opts?: { dateCutoff?: string, minScore?: number }) {
   const docs = await retrieve(ns, question, k, opts);
   const llm = process.env.OPENAI_API_KEY ? new ChatOpenAI({
     modelName: process.env.OPENAI_MODEL || 'gpt-4o-mini',
@@ -410,7 +421,7 @@ export async function answer(ns: Namespace, question: string, k = 5, opts?: { da
   return { answer: response, sources: docs.map(d=>({ text: d.pageContent, metadata: d.metadata })) };
 }
 
-export async function answerSSE(ns: Namespace, question: string, k = 5, onChunk?: (ev: {type:'sources'|'answer', data:any})=>void, opts?: { dateCutoff?: string }) {
+export async function answerSSE(ns: Namespace, question: string, k = 5, onChunk?: (ev: {type:'sources'|'answer', data:any})=>void, opts?: { dateCutoff?: string, minScore?: number }) {
   const docs = await retrieve(ns, question, k, opts);
   onChunk?.({ type:'sources', data: docs.map(d=>({ text: d.pageContent, metadata: d.metadata })) });
   if (!process.env.OPENAI_API_KEY) {
@@ -552,4 +563,90 @@ export async function ragStatsDetail(ns: Namespace): Promise<{ ns: string, docs:
     return { ns, docs: null };
   }
   return { ns, docs: null };
+}
+
+export async function deleteDocs(ns: Namespace, filters: { source?: string; before?: string }) {
+  const { source, before } = filters;
+  const beforeDate = before ? String(before) : undefined;
+  let deleted = 0;
+  if (STORE_KIND === 'sqlite') {
+    const rows = db.prepare(`SELECT id, metadata FROM rag_embeddings WHERE ns=?`).all(ns) as Array<{id:string, metadata:string}>;
+    const matches: string[] = [];
+    for (const r of rows) {
+      try {
+        const md = JSON.parse(r.metadata || '{}');
+        const src = String(md?.source || '');
+        const dstr = String(md?.date || '');
+        if (source && src !== source) continue;
+        if (beforeDate && (!dstr || dstr >= beforeDate)) continue; // delete strictly older than before
+        matches.push(r.id);
+      } catch {}
+    }
+    if (matches.length) {
+      const stmt = db.prepare(`DELETE FROM rag_embeddings WHERE ns=? AND id=?`);
+      db.transaction(()=>{ for (const id of matches) stmt.run(ns, id); })();
+    }
+    deleted = matches.length;
+    return { deleted };
+  }
+  if (STORE_KIND === 'memory') {
+    const store = memStores.get(ns) as any;
+    if (!store) return { deleted: 0 };
+    try {
+      const vectors = Array.isArray(store.memoryVectors) ? store.memoryVectors : [];
+      const kept = [] as any[];
+      for (const v of vectors) {
+        const doc = v.document || v;
+        const md = doc?.metadata || {};
+        const src = String(md?.source || '');
+        const dstr = String(md?.date || '');
+        const matchSource = source ? src === source : true;
+        const matchBefore = beforeDate ? (dstr && dstr < beforeDate) : true;
+        const toDelete = matchSource && matchBefore;
+        if (toDelete) deleted++; else kept.push(v);
+      }
+      store.memoryVectors = kept; // mutate in place
+    } catch {}
+    return { deleted };
+  }
+  if (STORE_KIND === 'hnsw') {
+    // Manipulate docstore.json
+    const newDoc = path.join(RAG_DIR, ns, 'docstore.json');
+    const legacyDoc = path.join(LEGACY_HNSW_DIR, ns, 'docstore.json');
+    const docPath = fs.existsSync(newDoc) ? newDoc : (fs.existsSync(legacyDoc) ? legacyDoc : '');
+    if (!docPath) return { deleted: 0 };
+    try {
+      const content = JSON.parse(fs.readFileSync(docPath, 'utf8')) as any;
+      const docsObj = content?.docstore?.docs || content?.docs || {};
+      const remaining: any = {};
+      for (const [id, d] of Object.entries(docsObj)) {
+        const md: any = (d as any)?.metadata || {};
+        const src = String(md?.source || '');
+        const dstr = String(md?.date || '');
+        const matchSource = source ? src === source : true;
+        const matchBefore = beforeDate ? (dstr && dstr < beforeDate) : true;
+        const toDelete = matchSource && matchBefore;
+        if (toDelete) deleted++; else remaining[id] = d;
+      }
+      if (content.docstore && content.docstore.docs) content.docstore.docs = remaining;
+      else content.docs = remaining;
+      fs.writeFileSync(docPath, JSON.stringify(content));
+      // Rebuild in-memory store if loaded
+      if (hnswLoaded.has(ns)) {
+        try {
+          const HNSWLib = await getHNSWLib();
+            const allDocs = Object.values(remaining).map((r: any)=> new Document({ pageContent: r.pageContent || r.page_content || r.page_content_ || '', metadata: r.metadata || {} }));
+            const store = await HNSWLib.fromDocuments(allDocs, await getStoreEmbeddings());
+            hnswLoaded.set(ns, store);
+            await store.save(nsPath(ns));
+        } catch {}
+      }
+    } catch {}
+    return { deleted };
+  }
+  if (STORE_KIND === 'chroma') {
+    // Chroma: no efficient metadata delete without ids; skip for now
+    return { deleted: 0, note: 'chroma_delete_not_implemented' } as any;
+  }
+  return { deleted };
 }

@@ -311,4 +311,102 @@ export class Api {
   agentStream(q: string, symbol?: string) {
     return fetch(`${this.base}/api/agent/stream`, { method:'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ q, symbol }) });
   }
+
+  async portfolio() {
+    const res = await fetch(`${this.base}/api/portfolio`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async portfolioAdd(symbol: string, buyDate: string, buyPrice: number, quantity: number) {
+    const res = await fetch(`${this.base}/api/portfolio/add`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ symbol, buyDate, buyPrice, quantity }) });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async portfolioDelete(id: number) {
+    const res = await fetch(`${this.base}/api/portfolio/${id}`, { method:'DELETE' });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async portfolioSummary() {
+    const res = await fetch(`${this.base}/api/portfolio/summary`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async portfolioPerformance() {
+    const res = await fetch(`${this.base}/api/portfolio/performance`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async watchlist() {
+    const res = await fetch(`${this.base}/api/watchlist`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async watchlistAdd(symbol: string) {
+    const res = await fetch(`${this.base}/api/watchlist/add`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ symbol }) });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async watchlistDelete(symbol: string) {
+    const res = await fetch(`${this.base}/api/watchlist/${symbol}`, { method:'DELETE' });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async alerts(limit=100) {
+    const url = new URL(`${this.base}/api/alerts`, window.location.origin);
+    url.searchParams.set('limit', String(limit));
+    const res = await fetch(url.toString());
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async alertAdd(symbol: string, kind: string, level: number, note?: string) {
+    const res = await fetch(`${this.base}/api/alerts/add`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ symbol, kind, level, note }) });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async alertDelete(id: number) {
+    const res = await fetch(`${this.base}/api/alerts/${id}`, { method:'DELETE' });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async rss(limit=50) {
+    const url = new URL(`${this.base}/api/rss`, window.location.origin);
+    url.searchParams.set('limit', String(limit));
+    const res = await fetch(url.toString());
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async foMetrics(symbol: string) {
+    const res = await fetch(`${this.base}/api/fo/${symbol}`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async providerData(symbol: string, provider?: string, limit=20) {
+    const url = new URL(`${this.base}/api/provider-data/${symbol}`, window.location.origin);
+    if (provider) url.searchParams.set('provider', provider);
+    url.searchParams.set('limit', String(limit));
+    const res = await fetch(url.toString());
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async defaultWatchlist() {
+    const res = await fetch(`${this.base}/api/defaultWatchlist`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async indices() {
+    const res = await fetch(`${this.base}/api/indices`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async sectors() {
+    const res = await fetch(`${this.base}/api/sectors`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async marketStatus() {
+    const res = await fetch(`${this.base}/api/marketStatus`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
 }

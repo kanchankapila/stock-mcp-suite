@@ -14,13 +14,15 @@
     "db:check": "node --loader ts-node/esm scripts/db-check.ts",
     "db:assert": "node --loader ts-node/esm scripts/db-assert.ts",
     "db:rebuild": "node --loader ts-node/esm scripts/rebuild.ts",
-    "alpha:fetch": "node --loader ts-node/esm scripts/alpha-fetch.ts AAPL"
+    "alpha:fetch": "node --loader ts-node/esm scripts/alpha-fetch.ts AAPL",
+    "test:ingestion": "node tests/ingestion-mock.cjs"
   },
   "dependencies": {
     "@huggingface/inference": "^4.7.1",
     "@langchain/community": "^0.3.13",
     "@langchain/openai": "^0.3.8",
     "better-sqlite3": "^9.5.0",
+    "bullmq": "^4.17.0",
     "cheerio": "^1.0.0-rc.12",
     "chromadb": "^3.0.14",
     "cors": "^2.8.5",
@@ -28,14 +30,18 @@
     "express": "^4.19.2",
     "hnswlib-node": "^3.0.0",
     "langchain": "^0.2.18",
+    "node-cron": "^3.0.3",
     "node-fetch": "^3.3.2",
+    "pg": "^8.16.3",
     "puppeteer": "^24.18.0",
     "sentiment": "^5.0.2",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^10.9.1",
     "@types/express": "^4.17.21",
+    "@types/node-cron": "^3.0.11",
     "ts-node": "^10.9.2",
     "tsx": "^4.7.0",
     "typescript": "^5.6.2"

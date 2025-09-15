@@ -2,8 +2,8 @@
  * Centralized stock service with improved error handling and validation
  */
 
-import { BaseService } from './base.service';
-import { ApiResponse } from '../utils/response.utils';
+import { BaseService } from './base.service.js';
+import { ApiResponse } from '../utils/response.utils.js';
 import db, { 
   upsertStock, 
   insertPriceRow, 
@@ -143,19 +143,25 @@ export class StockService extends BaseService {
       const prices = listPrices(symbol, 20);
       const prediction = prices.length >= 5 ? predictNextClose(prices) : 0;
 
-      // Get technical analysis
-      const backtest = prices.length >= 20 ? backtestSMA(prices, 10, 20) : null;
-      const score = backtest ? scoreStrategy(backtest) : 0;
+      // Pre-compute momentum once (used by strategy scoring + factors)
+      const momentum = this.calculateMomentum(prices);
 
-      // Calculate recommendation
+      // Get technical backtest (not directly fed into score yet; reserved for future enhancement)
+      const backtest = prices.length >= 20 ? backtestSMA(prices, 10, 20) : null;
+
+      // Strategy score (sentiment + momentum). Previously incorrectly passed backtest object.
+      const strat = scoreStrategy(sentiment, momentum); // returns { score, recommendation, components }
+      const score = strat.score;
+
+      // Calculate recommendation (kept for now; could unify with strat.recommendation later)
       const recommendation = this.calculateRecommendation(sentiment, prediction, score);
 
-      // Calculate factors
+      // Calculate factors (reuse momentum; technical currently uses strategy score as before)
       const factors = {
-        momentum: this.calculateMomentum(prices),
+        momentum,         // already computed
         sentiment,
-        technical: score,
-        options: 0 // Placeholder for options data
+        technical: score, // placeholder until separate technical metric (e.g., from backtest) added
+        options: 0        // Placeholder for options data
       };
 
       const analysis: StockAnalysis = {
@@ -168,8 +174,20 @@ export class StockService extends BaseService {
         factors
       };
 
-      // Save analysis
-      saveAnalysis(symbol, analysis);
+      // Save analysis (fix: provide proper object per saveAnalysis signature)
+      try {
+        saveAnalysis({
+          symbol,
+          created_at: new Date().toISOString(),
+            sentiment_score: sentiment,
+            predicted_close: prediction,
+            strategy: { factors, confidence: analysis.confidence },
+            score: analysis.score,
+            recommendation: analysis.recommendation
+        });
+      } catch (e) {
+        this.logger.warn({ symbol, e }, 'save_analysis_failed');
+      }
 
       return this.success(analysis);
 
@@ -230,7 +248,8 @@ export class StockService extends BaseService {
       try {
         const mcInsights = await fetchMcInsights(symbol);
         if (mcInsights) {
-          upsertMcTech(symbol, mcInsights);
+          // fix: upsertMcTech requires freq argument
+          upsertMcTech(symbol, 'D', mcInsights);
           messages.push('Updated Moneycontrol insights');
         }
       } catch (error) {
@@ -241,12 +260,8 @@ export class StockService extends BaseService {
       // Index news for RAG
       if (news.length > 0) {
         try {
-          const ragData = news.map(n => ({
-            text: `${n.title}\n\n${n.summary}`,
-            metadata: { source: 'news', symbol, date: n.date, url: n.url }
-          }));
-          
-          await indexDocs(symbol, ragData);
+          // fix: indexDocs expects docs with title/summary fields; pass raw news entries
+          await indexDocs(symbol, news);
           messages.push('Indexed news for RAG');
         } catch (error) {
           this.logger.warn({ symbol, error }, 'rag_indexing_failed');
@@ -254,8 +269,8 @@ export class StockService extends BaseService {
         }
       }
 
-      // Upsert stock record
-      upsertStock(symbol, name || symbol, 'USD', 'Stock');
+      // Upsert stock record (fix: remove unsupported extra params)
+      upsertStock(symbol, name || symbol);
 
       return this.success({
         message: messages.join('; '),
