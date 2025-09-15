@@ -24,6 +24,7 @@ import { router as jobsRoutes } from './routes/jobs.js';
 import { router as portfolioRoutes } from './routes/portfolio.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 import { ResponseUtils } from './shared/utils/response.utils.js';
+import { router as agentRoutes } from './routes/agent.js';
 
 const app = express();
 app.use(cors());
@@ -66,6 +67,7 @@ app.use('/api', tlCacheRoutes);
 app.use('/api', sourcesRoutes);
 app.use('/api', portfolioRoutes);
 app.use('/api', providersRoutes);
+app.use('/api', agentRoutes);
 attachMcp(app);
 
 // 404 handler
@@ -83,7 +85,9 @@ process.on('uncaughtException', (err) => {
 });
 
 const BASE_PORT = Number(process.env.PORT || 4010);
-const PORT_AUTOINC = String(process.env.PORT_AUTOINC ?? 'true') === 'true';
+const isDev = (process.env.NODE_ENV || '').toLowerCase() !== 'production';
+// Disable auto-increment by default in dev for stability; allow prod to keep prior behavior
+const PORT_AUTOINC = String(process.env.PORT_AUTOINC ?? (isDev ? 'false' : 'true')) === 'true';
 const PORT_MAX_TRIES = Number(process.env.PORT_MAX_TRIES || 5);
 
 function listenOnce(port: number) {

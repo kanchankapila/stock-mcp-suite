@@ -242,10 +242,13 @@ function computeMarketStatus(now = new Date()) {
       }
       nextOpen = next.toISOString();
     }
-    return { istIso: ist.toISOString(), status, isOpen, nextOpen, nextClose };
+    // Added homepage friendly fields
+    const dateStr = ist.toISOString().slice(0,10);
+    const timeStr = ist.toISOString().slice(11,19);
+    return { istIso: ist.toISOString(), status, isOpen, nextOpen, nextClose, date: dateStr, time: timeStr, timezone: 'IST', marketOpen: isOpen };
   } catch (err) {
     logger.warn({ err }, 'market_status_failed');
-    return { istIso: new Date().toISOString(), status: 'UNKNOWN', isOpen: false, nextOpen: null, nextClose: null };
+    return { istIso: new Date().toISOString(), status: 'UNKNOWN', isOpen: false, nextOpen: null, nextClose: null, date: new Date().toISOString().slice(0,10), time: new Date().toISOString().slice(11,19), timezone: 'IST', marketOpen: false };
   }
 }
 

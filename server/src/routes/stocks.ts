@@ -11,7 +11,8 @@ import { backtestSMA, scoreStrategy } from '../analytics/backtest.js';
 import { indexDocs } from '../rag/indexer.js';
 import { indexNamespace } from '../rag/langchain.js';
 import { retrieve } from '../rag/retriever.js';
-import { agentAnswer, agentAnswerStream } from '../agent/agent.js';
+// REMOVE legacy agent imports
+// import { agentAnswer, agentAnswerStream } from '../agent/agent.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { logger } from '../utils/logger.js';
 import { loadStocklist } from '../utils/stocklist.js';
@@ -21,6 +22,27 @@ import { ResponseUtils } from '../shared/utils/response.utils.js';
 import { computeTopPicks, parseWeights } from '../services/topPicks.js';
 
 export const router = Router();
+
+// List stocks (for selector). Must be declared before /stocks/:symbol routes so 'list' is not treated as a symbol.
+router.get('/stocks/list', asyncHandler(async (req, res) => {
+  try {
+    const limit = req.query.limit ? Number(req.query.limit) : 1000;
+    const entries = loadStocklist();
+    const out: Array<{ name: string; symbol: string; yahoo: string }> = [];
+    const seen = new Set<string>();
+    for (const e of entries) {
+      const sym = (e.symbol || '').toUpperCase();
+      if (!sym || seen.has(sym)) continue;
+      seen.add(sym);
+      out.push({ name: e.name || sym, symbol: sym, yahoo: sym });
+      if (out.length >= limit) break;
+    }
+    if (!out.length) return res.json(ResponseUtils.success([], 'empty'));
+    res.json(ResponseUtils.success(out));
+  } catch (err:any) {
+    res.status(500).json(ResponseUtils.error(String(err?.message || err)));
+  }
+}));
 
 // Resolve provider-specific identifiers for a given input
 router.get('/resolve/:input', asyncHandler(async (req, res) => {
@@ -208,24 +230,7 @@ router.get('/rag/:symbol/search', asyncHandler((req, res) => {
   res.json(ResponseUtils.success(results));
 }));
 
-router.get('/agent', asyncHandler(async (req, res) => {
-  const prompt = String(req.query.q || '');
-  const symbol = req.query.symbol ? String(req.query.symbol) : undefined;
-  const result = await agentAnswer(prompt, symbol);
-  res.json(result);
-}));
-
-router.post('/agent/stream', asyncHandler(async (req, res) => {
-  const { q, symbol } = req.body || {};
-  if (!q) return res.status(400).json({ ok:false, error: 'q required' });
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders?.();
-  const send = (ev: string, data: any) => { res.write(`event: ${ev}\n`); res.write(`data: ${JSON.stringify(data)}\n\n`); };
-  await agentAnswerStream(String(q), symbol ? String(symbol) : undefined, ({type, data})=> send(type, data));
-  res.end();
-}));
+// Removed deprecated /agent and /agent/stream routes (handled in routes/agent.ts)
 
 // List available ticker providers and their resolution config
 router.get('/resolve/providers', asyncHandler((_req, res) => {

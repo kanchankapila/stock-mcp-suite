@@ -18,3 +18,4 @@ server/server/.rag/*
 # Editor
 .vscode/
 .idea/
+ml-svc/__pycache__/app.cpython-311.pyc
