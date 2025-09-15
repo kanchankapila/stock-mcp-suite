@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { asyncHandler } from '../utils/asyncHandler.js';
-import { etGetAllIndices, etSectorPerformance, etIndexConstituents, mcPriceVolume, mcStockHistory, tickertapeMmiNow, marketsMojoValuationMeter, mcChartInfo, mcPriceForecast, mcFnoExpiries, mcTechRsi } from '../providers/external.js';
+import { etGetAllIndices, etSectorPerformance, etIndexConstituents, mcPriceVolume, mcStockHistory, tickertapeMmiNow, marketsMojoValuationMeter, mcChartInfo, mcPriceForecast, mcFnoExpiries, mcTechRsi, mcPriceVolumeCached } from '../providers/external.js';
 import { tlAdvTechnical, tlSmaChart, tlDerivativeBuildup, tlHeatmap, getTrendlyneCookieStatus, getTrendlyneCookieDetails, normalizeAdvTechnical } from '../providers/trendlyne.js';
 import { getTlCache, upsertTlCache } from '../db.js';
 import fetch from 'node-fetch';
@@ -37,8 +37,13 @@ router.get('/mc/price-volume', asyncHandler(async (req, res) => {
   const entry = findStockEntry(base);
   const mcs = entry?.mcsymbol;
   if (!mcs) return res.status(404).json({ ok:false, error:`mcsymbol not found for ${input}` });
-  const data = await mcPriceVolume(mcs);
-  res.json({ ok: true, data });
+  const force = String(req.query.force || '').toLowerCase() === 'true';
+  try {
+    const data = await mcPriceVolumeCached(mcs, { force });
+    return res.json({ ok: true, data, meta: { mcsymbol: mcs, force } });
+  } catch (err:any) {
+    return res.status(502).json({ ok:false, error:'mc_price_volume_failed', message: err?.message || String(err), meta:{ mcsymbol: mcs } });
+  }
 }));
 
 router.get('/mc/stock-history', asyncHandler(async (req, res) => {

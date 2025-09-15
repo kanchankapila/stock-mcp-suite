@@ -18,27 +18,65 @@ export class Api {
     }
   }
 
+  // Simple in-memory cache (per tab) with TTL support. Not persisted across reloads unless opted.
+  private static _cache: Map<string, { exp: number; data: any }> = new Map();
+
+  /** Retrieve (or compute) a cached value with a TTL. */
+  async cached<T>(key: string, ttlMs: number, fetcher: () => Promise<T>): Promise<T> {
+    const now = Date.now();
+    const hit = Api._cache.get(key);
+    if (hit && hit.exp > now) return hit.data as T;
+    const data = await fetcher();
+    Api._cache.set(key, { exp: now + ttlMs, data });
+    return data;
+  }
+  /** Invalidate either a specific key or all keys starting with a prefix. */
+  static invalidate(prefix?: string) {
+    if (!prefix) { Api._cache.clear(); return; }
+    for (const k of Array.from(Api._cache.keys())) { if (k.startsWith(prefix)) Api._cache.delete(k); }
+  }
+  /** Snapshot current cache keys (for debugging). */
+  static cacheKeys(): string[] { return Array.from(Api._cache.keys()); }
+
+  /** Cached stock list (12h TTL). Shape mirrors listStocks(). */
+  listStocksCached(force = false) {
+    const ttl = 12 * 60 * 60 * 1000; // 12h
+    const key = 'listStocks';
+    if (force) Api.invalidate(key);
+    return this.cached(key, ttl, () => this.listStocks());
+  }
+
+  /** Lightweight cached price history slice converted to { t, c } pairs (5m TTL). */
+  async historySeriesCached(symbol: string, days = 60, force = false): Promise<Array<{ t: string; c: number }>> {
+    const ttl = 5 * 60 * 1000; // 5m
+    const key = `hist:${symbol}:${days}`;
+    if (force) Api.invalidate(key);
+    const raw = await this.cached(key, ttl, () => this.history(symbol));
+    const rows: any[] = Array.isArray((raw as any)?.data) ? (raw as any).data : Array.isArray(raw) ? raw as any[] : [];
+    return rows.slice(-days).map(r => ({ t: String(r.date || r.d || ''), c: Number(r.close ?? r.c ?? NaN) })).filter(r => Number.isFinite(r.c));
+  }
+
   async ingest(symbol: string) {
     const res = await fetch(`${this.base}/api/ingest/${symbol}`, { method:'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({}) });
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   }
 
-  async overview(symbol: string) {
+  async overview(symbol: string, opts?: { signal?: AbortSignal }) {
     const url = new URL(`${this.base}/api/stocks/${symbol}/overview`, window.location.origin);
-    const res = await fetch(url.toString());
+    const res = await fetch(url.toString(), { signal: opts?.signal });
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   }
 
-  async history(symbol: string) {
-    const res = await fetch(`${this.base}/api/stocks/${symbol}/history`);
+  async history(symbol: string, opts?: { signal?: AbortSignal }) {
+    const res = await fetch(`${this.base}/api/stocks/${symbol}/history`, { signal: opts?.signal });
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   }
 
-  async news(symbol: string) {
-    const res = await fetch(`${this.base}/api/stocks/${symbol}/news`);
+  async news(symbol: string, opts?: { signal?: AbortSignal }) {
+    const res = await fetch(`${this.base}/api/stocks/${symbol}/news`, { signal: opts?.signal });
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   }
@@ -52,8 +90,8 @@ export class Api {
     return res.json();
   }
 
-  async analyze(symbol: string) {
-    const res = await fetch(`${this.base}/api/stocks/${symbol}/analyze`, { method:'POST' });
+  async analyze(symbol: string, opts?: { signal?: AbortSignal }) {
+    const res = await fetch(`${this.base}/api/stocks/${symbol}/analyze`, { method:'POST', signal: opts?.signal });
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   }
@@ -73,8 +111,8 @@ export class Api {
     return res.json();
   }
 
-  async listStocks() {
-    const res = await fetch(`${this.base}/api/stocks/list`);
+  async listStocks(opts?: { signal?: AbortSignal }) {
+    const res = await fetch(`${this.base}/api/stocks/list`, { signal: opts?.signal });
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   }
@@ -123,9 +161,10 @@ export class Api {
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   }
-  async mcPriceVolume(symbol: string) {
+  async mcPriceVolume(symbol: string, opts?: { force?: boolean }) {
     const url = new URL(`${this.base}/api/external/mc/price-volume`, window.location.origin);
     url.searchParams.set('symbol', symbol);
+    if (opts?.force) url.searchParams.set('force', 'true');
     const res = await fetch(url.toString());
     if (!res.ok) throw new Error(await res.text());
     return res.json();
