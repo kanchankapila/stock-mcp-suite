@@ -38,12 +38,21 @@ async function fetchJson(url: string, extra?: Record<string,string>, timeoutMs=1
     const ctrl = new AbortController();
     const to = setTimeout(()=>ctrl.abort(), timeoutMs);
     try {
+      logger.info({ url, attempt: i+1 }, 'external_fetch_start');
       const res = await fetch(url, { headers, signal: ctrl.signal });
       clearTimeout(to);
       if (!res.ok) {
+        logger.warn({ url, status: res.status }, 'external_fetch_not_ok');
         lastErr = new Error(`${res.status}`);
       } else {
-        try { return await res.json(); } catch { return null; }
+        try {
+          const j = await res.json();
+          logger.info({ url, status: res.status }, 'external_fetch_ok');
+          return j;
+        } catch {
+          logger.warn({ url }, 'external_fetch_json_parse_failed');
+          return null;
+        }
       }
     } catch (err) {
       lastErr = err;
@@ -79,6 +88,35 @@ export async function mcPriceVolume(scId: string) {
   const id = scId.toUpperCase();
   const url = `https://api.moneycontrol.com/mcapi/v1/stock/price-volume?scId=${encodeURIComponent(id)}`;
   return await fetchJson(url);
+}
+
+let _mcPvCache = new Map<string, { ts: number; data: any }>();
+const MC_PV_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+export async function mcPriceVolumeCached(scId: string, opts?: { force?: boolean }) {
+  const id = scId.toUpperCase();
+  const force = !!opts?.force;
+  const now = Date.now();
+  if (!force) {
+    const cached = _mcPvCache.get(id);
+    if (cached && (now - cached.ts) < MC_PV_TTL_MS) {
+      const base = (cached.data && typeof cached.data === 'object') ? cached.data : { value: cached.data };
+      return { ...(base as any), _cached: true, _ageMs: now - cached.ts };
+    }
+  }
+  try {
+    const fresh = await mcPriceVolume(id);
+    _mcPvCache.set(id, { ts: now, data: fresh });
+    const base = (fresh && typeof fresh === 'object') ? fresh : { value: fresh };
+    return { ...(base as any), _cached: false, _ageMs: 0 };
+  } catch (err:any) {
+    const cached = _mcPvCache.get(id);
+    if (cached) {
+      const base = (cached.data && typeof cached.data === 'object') ? cached.data : { value: cached.data };
+      return { ...(base as any), _cached: true, _stale: true, _ageMs: now - cached.ts, _warn: 'stale_fallback', _err: String(err?.message||err) };
+    }
+    throw err;
+  }
 }
 
 export async function mcStockHistory(eqSymbol: string, resolution='1D', from?: number, to?: number) {

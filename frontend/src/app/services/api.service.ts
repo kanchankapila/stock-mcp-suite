@@ -1,8 +1,60 @@
 export class Api {
-  // Prefer Vite env var; otherwise use relative path so Vite proxy can handle it
+  // Prefer Vite env var; otherwise fall back to same-host :4010
   constructor(
-    private base = (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_API_BASE) || ''
-  ) {}
+    private base = ((typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_API_BASE) || '')
+  ) {
+    // If no base provided, try to infer a sensible default so prod/static builds still work
+    if (!this.base) this.base = this.serverBaseFallback();
+  }
+
+  private serverBaseFallback() {
+    try {
+      const loc: any = window?.location || {};
+      const proto = loc.protocol || 'http:';
+      const host = loc.hostname || 'localhost';
+      return `${proto}//${host}:4010`;
+    } catch {
+      return 'http://localhost:4010';
+    }
+  }
+
+  // Simple in-memory cache (per tab) with TTL support. Not persisted across reloads unless opted.
+  private static _cache: Map<string, { exp: number; data: any }> = new Map();
+
+  /** Retrieve (or compute) a cached value with a TTL. */
+  async cached<T>(key: string, ttlMs: number, fetcher: () => Promise<T>): Promise<T> {
+    const now = Date.now();
+    const hit = Api._cache.get(key);
+    if (hit && hit.exp > now) return hit.data as T;
+    const data = await fetcher();
+    Api._cache.set(key, { exp: now + ttlMs, data });
+    return data;
+  }
+  /** Invalidate either a specific key or all keys starting with a prefix. */
+  static invalidate(prefix?: string) {
+    if (!prefix) { Api._cache.clear(); return; }
+    for (const k of Array.from(Api._cache.keys())) { if (k.startsWith(prefix)) Api._cache.delete(k); }
+  }
+  /** Snapshot current cache keys (for debugging). */
+  static cacheKeys(): string[] { return Array.from(Api._cache.keys()); }
+
+  /** Cached stock list (12h TTL). Shape mirrors listStocks(). */
+  listStocksCached(force = false) {
+    const ttl = 12 * 60 * 60 * 1000; // 12h
+    const key = 'listStocks';
+    if (force) Api.invalidate(key);
+    return this.cached(key, ttl, () => this.listStocks());
+  }
+
+  /** Lightweight cached price history slice converted to { t, c } pairs (5m TTL). */
+  async historySeriesCached(symbol: string, days = 60, force = false): Promise<Array<{ t: string; c: number }>> {
+    const ttl = 5 * 60 * 1000; // 5m
+    const key = `hist:${symbol}:${days}`;
+    if (force) Api.invalidate(key);
+    const raw = await this.cached(key, ttl, () => this.history(symbol));
+    const rows: any[] = Array.isArray((raw as any)?.data) ? (raw as any).data : Array.isArray(raw) ? raw as any[] : [];
+    return rows.slice(-days).map(r => ({ t: String(r.date || r.d || ''), c: Number(r.close ?? r.c ?? NaN) })).filter(r => Number.isFinite(r.c));
+  }
 
   async ingest(symbol: string) {
     const res = await fetch(`${this.base}/api/ingest/${symbol}`, { method:'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({}) });
@@ -10,26 +62,36 @@ export class Api {
     return res.json();
   }
 
-  async overview(symbol: string) {
-    const res = await fetch(`${this.base}/api/stocks/${symbol}/overview`);
+  async overview(symbol: string, opts?: { signal?: AbortSignal }) {
+    const url = new URL(`${this.base}/api/stocks/${symbol}/overview`, window.location.origin);
+    const res = await fetch(url.toString(), { signal: opts?.signal });
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   }
 
-  async history(symbol: string) {
-    const res = await fetch(`${this.base}/api/stocks/${symbol}/history`);
+  async history(symbol: string, opts?: { signal?: AbortSignal }) {
+    const res = await fetch(`${this.base}/api/stocks/${symbol}/history`, { signal: opts?.signal });
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   }
 
-  async news(symbol: string) {
-    const res = await fetch(`${this.base}/api/stocks/${symbol}/news`);
+  async news(symbol: string, opts?: { signal?: AbortSignal }) {
+    const res = await fetch(`${this.base}/api/stocks/${symbol}/news`, { signal: opts?.signal });
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   }
 
-  async analyze(symbol: string) {
-    const res = await fetch(`${this.base}/api/stocks/${symbol}/analyze`, { method:'POST' });
+  async optionsMetrics(symbol: string, days=60, limit=90) {
+    const url = new URL(`${this.base}/api/stocks/${symbol}/options-metrics`, window.location.origin);
+    url.searchParams.set('days', String(days));
+    url.searchParams.set('limit', String(limit));
+    const res = await fetch(url.toString());
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+
+  async analyze(symbol: string, opts?: { signal?: AbortSignal }) {
+    const res = await fetch(`${this.base}/api/stocks/${symbol}/analyze`, { method:'POST', signal: opts?.signal });
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   }
@@ -41,7 +103,7 @@ export class Api {
   }
 
   async agent(q: string, symbol?: string) {
-    const url = new URL(`${this.base}/api/agent`);
+    const url = new URL(`${this.base}/api/agent`, window.location.origin);
     url.searchParams.set('q', q);
     if (symbol) url.searchParams.set('symbol', symbol);
     const res = await fetch(url.toString());
@@ -49,8 +111,8 @@ export class Api {
     return res.json();
   }
 
-  async listStocks() {
-    const res = await fetch(`${this.base}/api/stocks/list`);
+  async listStocks(opts?: { signal?: AbortSignal }) {
+    const res = await fetch(`${this.base}/api/stocks/list`, { signal: opts?.signal });
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   }
@@ -62,7 +124,7 @@ export class Api {
   }
 
   async mcTech(symbol: string, freq: 'D'|'W'|'M'='D') {
-    const url = new URL(`${this.base}/api/stocks/${symbol}/mc-tech`);
+    const url = new URL(`${this.base}/api/stocks/${symbol}/mc-tech`, window.location.origin);
     url.searchParams.set('freq', freq);
     const res = await fetch(url.toString());
     if (!res.ok) throw new Error(await res.text());
@@ -70,7 +132,7 @@ export class Api {
   }
 
   async yahooFull(symbol: string, range='1y', interval='1d', modules='price,summaryDetail,assetProfile,financialData,defaultKeyStatistics') {
-    const url = new URL(`${this.base}/api/stocks/${symbol}/yahoo-full`);
+    const url = new URL(`${this.base}/api/stocks/${symbol}/yahoo-full`, window.location.origin);
     url.searchParams.set('range', range);
     url.searchParams.set('interval', interval);
     url.searchParams.set('modules', modules);
@@ -91,7 +153,7 @@ export class Api {
     return res.json();
   }
   async etIndexConstituents(indexId: string, pagesize=200, pageno=1) {
-    const url = new URL(`${this.base}/api/external/et/index-constituents`);
+    const url = new URL(`${this.base}/api/external/et/index-constituents`, window.location.origin);
     url.searchParams.set('indexId', indexId);
     url.searchParams.set('pagesize', String(pagesize));
     url.searchParams.set('pageno', String(pageno));
@@ -99,15 +161,16 @@ export class Api {
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   }
-  async mcPriceVolume(scId: string) {
-    const url = new URL(`${this.base}/api/external/mc/price-volume`);
-    url.searchParams.set('scId', scId);
+  async mcPriceVolume(symbol: string, opts?: { force?: boolean }) {
+    const url = new URL(`${this.base}/api/external/mc/price-volume`, window.location.origin);
+    url.searchParams.set('symbol', symbol);
+    if (opts?.force) url.searchParams.set('force', 'true');
     const res = await fetch(url.toString());
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   }
   async mcStockHistory(symbol: string, resolution='1D', from?: number, to?: number) {
-    const url = new URL(`${this.base}/api/external/mc/stock-history`);
+    const url = new URL(`${this.base}/api/external/mc/stock-history`, window.location.origin);
     url.searchParams.set('symbol', symbol);
     url.searchParams.set('resolution', resolution);
     if (from) url.searchParams.set('from', String(from));
@@ -126,10 +189,37 @@ export class Api {
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   }
+  async topPicks(days=60, limit=10) {
+    const url = new URL(`${this.base}/api/top-picks`, window.location.origin);
+    url.searchParams.set('days', String(days));
+    url.searchParams.set('limit', String(limit));
+    const res = await fetch(url.toString());
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+
+  // Health checks
+  async health() {
+    const url = this.base ? new URL(`${this.base}/health`, window.location.origin).toString() : `${this.serverBaseFallback()}/health`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async ragHealth() {
+    const url = this.base ? new URL(`${this.base}/health/rag`, window.location.origin).toString() : `${this.serverBaseFallback()}/health/rag`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async tlCookieStatus() {
+    const res = await fetch(`${this.base}/api/external/trendlyne/cookie-status`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
 
   // Moneycontrol quick bundle
   async mcQuick(symbol: string, fid?: string) {
-    const url = new URL(`${this.base}/api/external/mc/quick`);
+    const url = new URL(`${this.base}/api/external/mc/quick`, window.location.origin);
     url.searchParams.set('symbol', symbol);
     if (fid) url.searchParams.set('fid', fid);
     const res = await fetch(url.toString());
@@ -138,18 +228,80 @@ export class Api {
   }
 
   // Trendlyne
-  async tlAdvTechBySymbol(symbol: string) {
-    const url = new URL(`${this.base}/api/external/trendlyne/adv-tech`);
+  async tlAdvTechBySymbol(symbol: string, opts?: { force?: boolean; lookback?: number }) {
+    const url = new URL(`${this.base}/api/external/trendlyne/adv-tech`, window.location.origin);
     url.searchParams.set('symbol', symbol);
+    if (opts?.force) url.searchParams.set('force', 'true');
+    if (opts?.lookback) url.searchParams.set('lookback', String(opts.lookback));
     const res = await fetch(url.toString());
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   }
+  async tlAdvTechByTlid(tlid: string, opts?: { force?: boolean; lookback?: number }) {
+    const url = new URL(`${this.base}/api/external/trendlyne/adv-tech`, window.location.origin);
+    url.searchParams.set('tlid', tlid);
+    if (opts?.force) url.searchParams.set('force', 'true');
+    if (opts?.lookback) url.searchParams.set('lookback', String(opts.lookback));
+    const res = await fetch(url.toString());
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async tlSmaBySymbol(symbol: string, opts?: { force?: boolean }) {
+    const url = new URL(`${this.base}/api/external/trendlyne/sma`, window.location.origin);
+    url.searchParams.set('symbol', symbol);
+    if (opts?.force) url.searchParams.set('force', 'true');
+    const res = await fetch(url.toString());
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async tlSmaByTlid(tlid: string, opts?: { force?: boolean }) {
+    const url = new URL(`${this.base}/api/external/trendlyne/sma`, window.location.origin);
+    url.searchParams.set('tlid', tlid);
+    if (opts?.force) url.searchParams.set('force', 'true');
+    const res = await fetch(url.toString());
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async tlCookieRefresh() {
+    const res = await fetch(`${this.base}/api/external/trendlyne/cookie-refresh`, { method:'POST' });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
   async tlDerivatives(date: string, tlid?: string) {
-    const url = new URL(`${this.base}/api/external/trendlyne/derivatives`);
+    const url = new URL(`${this.base}/api/external/trendlyne/derivatives`, window.location.origin);
     url.searchParams.set('date', date);
     if (tlid) url.searchParams.set('tlid', tlid);
     const res = await fetch(url.toString());
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+
+  // AlphaVantage (via stocks route)
+  async alphaVantageIngest(symbol: string) {
+    const res = await fetch(`${this.base}/api/stocks/alpha/ingest/${symbol}`, { method:'POST' });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+
+  // Yahoo specific routes
+  async yahooIngest(symbol: string, range='1y', interval='1d') {
+    const url = new URL(`${this.base}/api/stocks/yahoo/ingest/${symbol}`, window.location.origin);
+    url.searchParams.set('range', range);
+    url.searchParams.set('interval', interval);
+    const res = await fetch(url.toString(), { method:'POST' });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+
+  // Resolve ticker mapping
+  async resolveTicker(input: string) {
+    const res = await fetch(`${this.base}/api/resolve/${input}`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+
+  async resolveProviders() {
+    const res = await fetch(`${this.base}/api/resolve/providers`);
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   }
@@ -169,7 +321,131 @@ export class Api {
     return fetch(`${this.base}/api/rag/stream`, { method:'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ namespace, query, k }) });
   }
 
+  async ragStats() {
+    const res = await fetch(`${this.base}/api/rag/stats`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async ragStatsNs(ns: string) {
+    const res = await fetch(`${this.base}/api/rag/stats/${encodeURIComponent(ns)}`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async ragUrlStatus(ns: string) {
+    const res = await fetch(`${this.base}/api/rag/url-status/${encodeURIComponent(ns)}`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async ragBuildBatch(days: number) {
+    const res = await fetch(`${this.base}/api/rag/admin/build-batch?days=${encodeURIComponent(String(days))}`, { method:'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ days }) });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async ragMigrateAdmin() {
+    const res = await fetch(`${this.base}/api/rag/admin/migrate`, { method:'POST' });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+
   agentStream(q: string, symbol?: string) {
     return fetch(`${this.base}/api/agent/stream`, { method:'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ q, symbol }) });
+  }
+
+  async portfolio() {
+    const res = await fetch(`${this.base}/api/portfolio`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async portfolioAdd(symbol: string, buyDate: string, buyPrice: number, quantity: number) {
+    const res = await fetch(`${this.base}/api/portfolio/add`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ symbol, buyDate, buyPrice, quantity }) });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async portfolioDelete(id: number) {
+    const res = await fetch(`${this.base}/api/portfolio/${id}`, { method:'DELETE' });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async portfolioSummary() {
+    const res = await fetch(`${this.base}/api/portfolio/summary`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async portfolioPerformance() {
+    const res = await fetch(`${this.base}/api/portfolio/performance`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async watchlist() {
+    const res = await fetch(`${this.base}/api/watchlist`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async watchlistAdd(symbol: string) {
+    const res = await fetch(`${this.base}/api/watchlist/add`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ symbol }) });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async watchlistDelete(symbol: string) {
+    const res = await fetch(`${this.base}/api/watchlist/${symbol}`, { method:'DELETE' });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async alerts(limit=100) {
+    const url = new URL(`${this.base}/api/alerts`, window.location.origin);
+    url.searchParams.set('limit', String(limit));
+    const res = await fetch(url.toString());
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async alertAdd(symbol: string, kind: string, level: number, note?: string) {
+    const res = await fetch(`${this.base}/api/alerts/add`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ symbol, kind, level, note }) });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async alertDelete(id: number) {
+    const res = await fetch(`${this.base}/api/alerts/${id}`, { method:'DELETE' });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async rss(limit=50) {
+    const url = new URL(`${this.base}/api/rss`, window.location.origin);
+    url.searchParams.set('limit', String(limit));
+    const res = await fetch(url.toString());
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async foMetrics(symbol: string) {
+    const res = await fetch(`${this.base}/api/fo/${symbol}`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async providerData(symbol: string, provider?: string, limit=20) {
+    const url = new URL(`${this.base}/api/provider-data/${symbol}`, window.location.origin);
+    if (provider) url.searchParams.set('provider', provider);
+    url.searchParams.set('limit', String(limit));
+    const res = await fetch(url.toString());
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async defaultWatchlist() {
+    const res = await fetch(`${this.base}/api/defaultWatchlist`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async indices() {
+    const res = await fetch(`${this.base}/api/indices`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async sectors() {
+    const res = await fetch(`${this.base}/api/sectors`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+  async marketStatus() {
+    const res = await fetch(`${this.base}/api/marketStatus`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
   }
 }

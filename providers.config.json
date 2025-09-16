@@ -1,0 +1,70 @@
+[
+  {
+    "id": "alphavantage",
+    "name": "Alpha Vantage Daily Prices",
+    "kind": "prices",
+    "enabled": true,
+    "ragEnabled": false,
+    "symbols": ["AAPL", "MSFT", "GOOG"],
+    "apiKeyEnv": "ALPHAVANTAGE_API_KEY",
+    "rateLimitRpm": 5,
+    "maxRetries": 1,
+    "backoffBaseMs": 750,
+    "scheduleCron": "15 22 * * *",
+    "disableOnFailures": 3
+  },
+  {
+    "id": "newsapi",
+    "name": "NewsAPI Company News",
+    "kind": "news",
+    "enabled": true,
+    "ragEnabled": true,
+    "symbols": ["AAPL", "MSFT", "GOOG"],
+    "apiKeyEnv": "NEWS_API_KEY",
+    "queryMode": "symbol",
+    "rateLimitRpm": 30,
+    "maxRetries": 1,
+    "backoffBaseMs": 500,
+    "scheduleCron": "30 22 * * *",
+    "disableOnFailures": 5
+  },
+  {
+    "id": "stooq",
+    "name": "Stooq Daily Prices (free)",
+    "kind": "prices",
+    "enabled": true,
+    "ragEnabled": false,
+    "symbols": ["AAPL", "MSFT", "GOOG"],
+    "rateLimitRpm": 60,
+    "maxRetries": 1,
+    "backoffBaseMs": 300,
+    "scheduleCron": "0 */6 * * *",
+    "disableOnFailures": 5
+  },
+  {
+    "id": "moneycontrol",
+    "name": "Moneycontrol Insights & Technicals",
+    "kind": "mixed",
+    "enabled": true,
+    "ragEnabled": true,
+    "symbols": ["AAPL", "MSFT", "GOOG"],
+    "rateLimitRpm": 30,
+    "maxRetries": 1,
+    "backoffBaseMs": 500,
+    "scheduleCron": "15 */4 * * *",
+    "disableOnFailures": 5
+  },
+  {
+    "id": "trendlyne",
+    "name": "Trendlyne Advanced Technicals",
+    "kind": "derivatives",
+    "enabled": true,
+    "ragEnabled": false,
+    "symbols": ["AAPL", "MSFT", "GOOG"],
+    "rateLimitRpm": 20,
+    "maxRetries": 1,
+    "backoffBaseMs": 700,
+    "scheduleCron": "30 */6 * * *",
+    "disableOnFailures": 5
+  }
+]

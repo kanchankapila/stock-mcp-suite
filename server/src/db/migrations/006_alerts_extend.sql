@@ -1,0 +1,2 @@
+-- Migration 006 (no-op): alerts extended columns now handled dynamically in db.ts
+-- Intentionally left blank to prevent ALTER failures on fresh databases.

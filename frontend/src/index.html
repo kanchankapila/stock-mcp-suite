@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html>
   <head>
     <meta charset="utf-8" />
@@ -77,17 +77,76 @@
 
       /* Ensure nested cards use light theme; override any inline dark bg */
       .card .card { background: var(--panel-2) !important; border-color: var(--border); box-shadow: 0 4px 10px rgba(31,41,55,0.06); }
+
+      .flip-card {
+        background-color: transparent;
+        perspective: 1000px;
+      }
+
+      .flip-card-inner {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        text-align: center;
+        transition: transform 0.6s;
+        transform-style: preserve-3d;
+      }
+
+      .flip-card:hover .flip-card-inner {
+        transform: rotateY(180deg);
+      }
+
+      .flip-card-front, .flip-card-back {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        -webkit-backface-visibility: hidden;
+        backface-visibility: hidden;
+        border-radius: 8px;
+        padding: 16px;
+      }
+
+      .flip-card-front {
+        background-color: #fff;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+      }
+
+      .flip-card-back {
+        background-color: #f8f9fa;
+        transform: rotateY(180deg);
+        padding: 16px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+      }
     </style>
   </head>
   <body>
     <header>
-      <div class="badge">Stock • RAG • MCP</div>
+      <div class="badge">Stock â€¢ RAG â€¢ MCP</div>
       <div class="muted">Demo dashboard (server on <span class="mono">http://localhost:4010</span>)</div>
     </header>
     <div id="app"></div>
     <script type="module" src="/main.ts"></script>
+    <script type="module" src="/top-picks.ts"></script>
+    <script type="module" src="/top-picks-history.ts"></script>
+    <script type="module" src="/live-cards.ts"></script>
+    <script type="module" src="/masonry.ts"></script>
+    <script type="module" src="/json-viewer.ts"></script>
+    <script type="module" src="/top-picks-delta.ts"></script>
+    <script type="module" src="/strategy-lab.ts"></script>
+    <script type="module" src="/predictions.ts"></script>
+    <script type="module" src="/alerts.ts"></script>
+    <script type="module" src="/lib/events.ts"></script>
+    <script type="module" src="/cards/registry.ts"></script>
+    <script type="module" src="/cards/tl-cache.ts"></script>
+    <script type="module" src="/cards/features-stored.ts"></script>
+    <script type="module" src="/cards/json-source-cards.ts"></script>
+    <script type="module" src="/provider-health.ts"></script>
+    <script type="module" src="/portfolio.ts"></script>
+    <!-- Removed /watchlist.ts and /market-status.ts (handled inside main.ts / portfolio.ts modules) -->
   </body>
 </html>
+
+
 
 
 

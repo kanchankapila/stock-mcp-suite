@@ -1,15 +1,273 @@
-﻿// Lightweight bootstrapping for the demo UI using vanilla TS + Vite.
+﻿// @ts-nocheck
+// Lightweight bootstrapping for the demo UI using vanilla TS + Vite.
 // If you want a full Angular project, generate one with Angular CLI and port the components/services.
 
 import { Api } from './app/services/api.service';
+import { Chart, registerables } from 'chart.js';
+Chart.register(...registerables);
+import { emitSymbolChange } from './lib/events';
+import * as CardRegistry from './cards/registry';
+import { escapeHtml } from './lib/format';
+import { emit as emitEvent } from './lib/events';
+
+// Lightweight value labels + last-value annotation plugin for Chart.js
+const ValueLabelsPlugin = {
+  id: 'valueLabels',
+  afterDatasetsDraw(chart: any, _args: any, _pluginOptions: any) {
+    const opts = (chart.options?.plugins && (chart.options.plugins as any).valueLabels) || {};
+    if (!opts || opts.enabled === false) return;
+    const ctx = chart.ctx;
+    ctx.save();
+    const type = chart.config.type;
+    const precision = Number.isFinite(opts.precision) ? opts.precision : 2;
+    const color = opts.color || '#444';
+
+    function fmt(v: any) {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return '';
+      if (precision === 0) return String(Math.round(n));
+      if (Math.abs(n) >= 1000) return n.toFixed(0);
+      return n.toFixed(precision);
+    }
+
+    if (type === 'bar') {
+      const horizontal = chart?.options?.indexAxis === 'y';
+      chart.data.datasets.forEach((ds: any, di: number) => {
+        const meta = chart.getDatasetMeta(di);
+        if (!meta || meta.hidden) return;
+        meta.data.forEach((elem: any, i: number) => {
+          const raw = ds.data?.[i];
+          const label = fmt(raw);
+          if (!label) return;
+          const pos = elem.tooltipPosition ? elem.tooltipPosition() : { x: elem.x, y: elem.y };
+          ctx.fillStyle = color;
+          ctx.font = '11px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+          ctx.textAlign = horizontal ? 'left' : 'center';
+          ctx.textBaseline = horizontal ? 'middle' : 'bottom';
+          const padX = horizontal ? 6 : 0;
+          const padY = horizontal ? 0 : 6;
+          const x = horizontal ? (pos.x + padX) : pos.x;
+          const y = horizontal ? pos.y : (pos.y - padY);
+          // simple contrast halo
+          ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+          ctx.lineWidth = 3;
+          ctx.strokeText(label, x, y);
+          ctx.fillText(label, x, y);
+        });
+      });
+    }
+
+    if (type === 'line' && opts.lastValue) {
+      // annotate last defined value of the first visible dataset
+      const di = (opts.datasetIndex ?? 0) as number;
+      const meta = chart.getDatasetMeta(di);
+      if (meta && !meta.hidden && Array.isArray(meta.data) && meta.data.length) {
+        // find last non-null point
+        let lastIdx = -1;
+        for (let i = meta.data.length - 1; i >= 0; i--) {
+          const v = chart.data.datasets?.[di]?.data?.[i];
+          if (v !== null && v !== undefined && Number.isFinite(Number(v))) { lastIdx = i; break; }
+        }
+        if (lastIdx >= 0) {
+          const elem = meta.data[lastIdx];
+          const v = chart.data.datasets[di].data[lastIdx];
+          const txt = fmt(v);
+          const pos = elem.tooltipPosition ? elem.tooltipPosition() : { x: elem.x, y: elem.y };
+          ctx.fillStyle = opts.color || '#1f2937';
+          ctx.font = '11px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          // marker
+          ctx.beginPath(); ctx.arc(pos.x, pos.y, 2.5, 0, Math.PI*2); ctx.fill();
+          // label
+          const x = pos.x + 6, y = pos.y;
+          ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+          ctx.lineWidth = 3;
+          ctx.strokeText(txt, x, y);
+          ctx.fillText(txt, x, y);
+        }
+      }
+    }
+
+    // Pie / Doughnut labels (counts and optional %)
+    if ((type === 'doughnut' || type === 'pie') && opts.enabled) {
+      const ds = chart.data?.datasets?.[0];
+      const meta = chart.getDatasetMeta(0);
+      if (!ds || !meta || !Array.isArray(meta.data)) return;
+      const total = (Array.isArray(ds.data) ? ds.data : []).reduce((acc: number, v: any) => {
+        const n = Number(v);
+        return acc + (Number.isFinite(n) ? n : 0);
+      }, 0);
+      meta.data.forEach((elem: any, i: number) => {
+        const raw = Array.isArray(ds.data) ? ds.data[i] : null;
+        const n = Number(raw);
+        if (!Number.isFinite(n) || n === 0) return;
+        const pct = total > 0 ? (n / total) * 100 : 0;
+        const label = opts.piePercent ? `${Math.round(n)} (${pct.toFixed(0)}%)` : `${Math.round(n)}`;
+        const pos = elem.tooltipPosition ? elem.tooltipPosition() : { x: elem.x, y: elem.y };
+        ctx.fillStyle = color;
+        ctx.font = '11px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        // subtle halo for contrast
+        ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+        ctx.lineWidth = 3;
+        ctx.strokeText(label, pos.x, pos.y);
+        ctx.fillText(label, pos.x, pos.y);
+      });
+    }
+    ctx.restore();
+  }
+};
+Chart.register(ValueLabelsPlugin as any);
 
 // Use default base from service (Vite env/proxy). Avoid hardcoding ports.
 const api = new Api();
+let LLM_ENABLED = false;
+(async ()=>{ try { const h = await new Api().ragHealth(); LLM_ENABLED = !!(h?.data?.llm?.enabled); } catch {} })();
+let currentPivotType: 'classic' | 'fibonacci' | 'camarilla' = 'classic';
+let currentTechFreq: 'D' | 'W' | 'M' = 'D';
+
+// Chart registry to prevent leaks on re-render
+const _charts: Record<string, Chart> = {} as any;
+function upsertChart(id: string, ctx: CanvasRenderingContext2D, cfg: any) {
+  try { _charts[id]?.destroy(); } catch {}
+  _charts[id] = new Chart(ctx, cfg);
+  return _charts[id];
+}
+
+// Theme helpers (resolve CSS variables to concrete colors)
+function cssVar(name: string, fallback: string) {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name);
+  return (v && v.trim()) || fallback;
+}
+function hexToRgba(hex: string, alpha: number) {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  if (!m) return hex;
+  const r = parseInt(m[1], 16), g = parseInt(m[2], 16), b = parseInt(m[3], 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+function withAlpha(color: string, alpha: number) {
+  if (color.startsWith('#')) return hexToRgba(color, alpha);
+  if (color.startsWith('rgb(')) return color.replace('rgb(', 'rgba(').replace(')', `, ${alpha})`);
+  return color;
+}
+const THEME = {
+  brand: cssVar('--brand', '#3b82f6'),
+  success: cssVar('--success', '#16a34a'),
+  danger: cssVar('--danger', '#ef4444'),
+  muted: cssVar('--muted', '#6b7280'),
+  border: cssVar('--border', '#e5e7eb'),
+  info: cssVar('--info', '#0ea5e9'),
+};
+
+// Patch: helper local history cache used by watchlist sparklines
+async function getHistoryCached(symbol: string, days=60): Promise<Array<{ t: string; c: number }>> {
+  try { return await new Api().historySeriesCached(symbol, days); } catch { return []; }
+}
 
 const root = document.getElementById('app')!;
 root.innerHTML = `
+  <style>
+    /* Layout primitives to prevent overlap and keep content contained */
+    *, *::before, *::after { box-sizing: border-box; }
+    .container { display: flex; flex-direction: column; gap: 12px; }
+    .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; align-items: start; }
+    .card { position: relative; background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 12px; box-shadow: 0 2px 8px rgba(31,41,55,0.06); overflow: hidden; min-width: 0; }
+    .card > * { max-width: 100%; }
+    .card img, .card canvas, .card svg, .card table { max-width: 100%; }
+    .card pre { max-width: 100%; white-space: pre-wrap; overflow: auto; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; word-break: break-word; overflow-wrap: anywhere; }
+    .flex { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+    canvas.sparkline { height: 56px; }
+    #mcHistChart, #historyChart { max-height: 220px; }
+    #sentimentGauge { height: 90px; }
+    #mcPvChart { max-height: 120px; }
+    .score-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:10px; align-items:stretch; width:100%; }
+    .score { border:1px solid var(--border); background: var(--panel-2); border-radius:12px; padding:10px; box-shadow: 0 2px 8px rgba(31,41,55,0.06); overflow:hidden; min-width:0; }
+    .score .label { font-size:12px; color: var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .score .value { font-size:24px; font-weight:700; display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; word-break:break-word; }
+    .score .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-weight:600; font-size:11px; }
+    @media (max-width: 900px) {
+      canvas.sparkline { height: 44px; }
+      #mcHistChart, #historyChart { max-height: 180px !important; }
+      #sentimentGauge { height: 72px !important; }
+      #mcPvChart { max-height: 100px !important; }
+    }
+    @media (max-width: 600px) {
+      canvas.sparkline { height: 40px; }
+      #mcHistChart, #historyChart { max-height: 160px !important; }
+    }
+    .btn-sm.active { background: var(--brand); color: #fff; border-color: var(--brand); }
+    .btn-sm { transition: background 0.15s ease, color 0.15s ease; }
+    .chip { display:inline-block; padding:2px 8px; border-radius:999px; font-weight:600; font-size:11px; }
+    .kpi { background: var(--panel-2); border:1px solid var(--border); border-radius:10px; padding:10px; box-shadow: 0 2px 8px rgba(31,41,55,0.06); }
+    .section-title { font-weight:600; color: var(--muted); margin:8px 0 4px; }
+    /* Shell */
+    header.app-header { position: sticky; top: 0; z-index: 20; backdrop-filter: blur(6px); background: color-mix(in srgb, var(--bg), transparent 10%); border-bottom: 1px solid var(--border); }
+    header .wrap { display:flex; gap:12px; align-items:center; justify-content:space-between; padding:10px 14px; }
+    .brand { display:flex; gap:10px; align-items:center; font-weight:700; letter-spacing:0.2px; }
+    .brand .dot { width:10px; height:10px; border-radius:999px; background: var(--color-primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary), transparent 80%); }
+    .searchbar { display:flex; gap:8px; align-items:center; flex:1; max-width: 680px; margin: 0 12px; }
+    .searchbar input { width:100%; padding:8px 10px; border:1px solid var(--border); border-radius:999px; background: var(--surface); color: var(--text); }
+    .toolbar { display:flex; gap:8px; align-items:center; }
+    .btn { padding:6px 10px; border:1px solid var(--border); border-radius:8px; background:transparent; color: var(--text); cursor:pointer; }
+    .tabs { display:flex; gap:4px; border:1px solid var(--border); border-radius:999px; padding:2px; }
+    .tab { padding:6px 10px; border-radius:999px; cursor:pointer; font-weight:600; color: var(--text-muted); }
+    .tab.active { background: var(--color-primary); color: #fff; }
+    .layout { display:flex; gap:14px; padding:12px; }
+    aside.sidebar { width: 220px; min-width: 200px; border-right:1px solid var(--border); padding-right:12px; }
+    aside .nav { display:flex; flex-direction:column; gap:6px; }
+    aside .nav a { padding:8px 10px; border-radius:8px; color: var(--text); text-decoration:none; border:1px solid transparent; cursor:pointer; }
+    aside .nav a.active, aside .nav a:hover { background: var(--surface); border-color: var(--border); }
+    main.content { flex:1; min-width:0; }
+    @media (max-width: 900px) { aside.sidebar { display:none; } .layout { padding:8px; } }
+
+    /* Inline spinner for loading states */
+    table.data-grid { width:100%; border-collapse:collapse; }
+    table.data-grid th, table.data-grid td { padding:8px; border-bottom:1px solid var(--border); }
+    table.data-grid th { text-align:left; font-weight:600; color: var(--muted); user-select:none; cursor:pointer; }
+    table.data-grid th.sort-asc::after { content: ' ↑'; }
+    table.data-grid th.sort-desc::after { content: ' ↓'; }
+    canvas.spark-mini { height: 36px; }
+    .spinner { width:16px; height:16px; border:2px solid var(--border); border-top-color: var(--color-primary); border-radius:50%; display:inline-block; animation: spin 1s linear infinite; vertical-align:middle; margin-right:8px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+  <header class="app-header">
+    <div class="wrap">
+      <div class="brand"><span class="dot"></span> Stock Analytics</div>
+      <div class="searchbar">
+        <input id="globalSearch" placeholder="Search stocks (name/symbol)�" list="stocksList" />
+      </div>
+      <div class="toolbar">
+        <div class="tabs" id="tfTabs" aria-label="Timeframe Tabs">
+          <div class="tab active" data-tf="D">Daily</div>
+          <div class="tab" data-tf="M">Monthly</div>
+          <div class="tab" data-tf="Y">Yearly</div>
+        </div>
+        <button class="btn" id="sidebarToggle" title="Toggle Sidebar" aria-label="Toggle Sidebar">☰</button>
+        <button class="btn" id="themeToggle" title="Toggle Theme" aria-label="Toggle Theme">🌓 Theme</button>
+      </div>
+    </div>
+  </header>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="nav">
+        <a data-route="#/overview" class="active" aria-label="Dashboard">📊 Dashboard</a>
+        <a data-route="#/insight" aria-label="Stock Insight">📈 Stock Insight</a>
+        <a data-route="#/ai" aria-label="AI">🤖 AI</a>
+        <a data-route="#/watchlist" aria-label="Watchlist">⭐ Watchlist</a>
+        <a data-route="#/portfolio" aria-label="Portfolio">💼 Portfolio</a>
+        <a data-route="#/alerts" aria-label="Alerts and Events">🔔 Alerts</a>
+        <a data-route="#/settings" aria-label="Settings">⚙️ Settings</a>
+        <a data-route="#/health" aria-label="Provider Health">🩺 Health</a>
+      </div>
+    </aside>
+    <main class="content">
   <div class="container">
-    <div class="card">
+    <div class="card" id="searchCard">
       <div class="flex">
         <input id="stockSearch" placeholder="Search stocks..." style="min-width:220px" />
         <select id="stockSelect" style="min-width:260px">
@@ -18,19 +276,87 @@ root.innerHTML = `
         <input id="symbol" placeholder="Enter stock symbol (e.g., AAPL)" list="stocksList" />
         <!-- Auto-fetches on selection; buttons removed -->
         <button id="dbstatsBtn">DB Data</button>
+        <button id="addToWatchlist" class="btn-sm" title="Add selected to Watchlist">+ Watchlist</button>
         
       </div>
       <datalist id="stocksList"></datalist>
       <div class="muted" style="margin-top:8px">Pulls prices & news (sample data if keys missing), then runs sentiment, prediction, strategy & backtest.</div>
     </div>
 
+    <div class="card" id="resolveCard" style="margin-top:12px">
+      <div class="muted">Ticker Resolve</div>
+      <div class="flex" style="gap:8px; margin-top:6px">
+        <input id="resolveInput" placeholder="Enter name/symbol (e.g., DABUR)" />
+        <button id="resolveRun">Resolve</button>
+        <button id="resolveUseSelected">Use Selected</button>
+      </div>
+      <div id="resolveProviders" class="muted" style="margin-top:6px"></div>
+      <pre id="resolveOutput" class="mono" style="white-space:pre-wrap; margin-top:6px"></pre>
+    </div>
+
+    <div class="card" id="suggestions" style="margin-top:12px">
+      <div class="muted">Smart Stock Suggestions</div>
+      <div id="suggestionsBody" style="margin-top:6px"></div>
+    </div>
+
+    <div id="marketOverview" style="margin-top:16px">
+      <div class="muted">Market Overview</div>
+    </div>
+    <div class="card" id="topPicks" style="margin-top:12px">
+      <div class="muted">Top Picks</div>
+      <div class="flex" style="gap:8px; margin-top:6px; align-items:center">
+        <input id="tpDays" type="number" min="5" step="5" value="60" style="width:120px" aria-label="Top Picks lookback (days)" />
+        <button id="tpRefresh" class="btn-sm">Refresh</button>
+        <span id="tpHint" class="muted"></span>
+      </div>
+      <div id="tpBody" class="mono" style="margin-top:6px"></div>
+    </div>
+
+    <div class="card" id="ragExplain" style="margin-top:12px">
+      <div class="muted">RAG Explain</div>
+      <div class="flex" style="gap:8px; margin-top:6px; align-items:center; flex-wrap:wrap">
+        <button id="ragExplainBtn" class="btn" aria-label="Explain last N days for selected stock">?? Explain last N days</button>
+        <input id="ragDays" type="number" min="1" step="1" placeholder="Days (optional)" aria-label="Custom days (optional)" style="width:140px; padding:6px; border:1px solid var(--border); border-radius:8px; background:var(--surface); color:var(--text)" />
+        <span class="muted" id="ragExplainHint"></span>
+      </div>
+      <div id="ragExplainBody" class="mono" role="status" aria-live="polite" style="white-space:pre-wrap; margin-top:8px"></div>
+    </div>
+
+    <div class="card" id="ragStats" style="margin-top:12px">
+      <div class="muted">RAG Stats</div>
+      <div class="flex" style="gap:8px; margin-top:6px; align-items:center">
+        <button id="ragStatsRefresh" class="btn-sm">Refresh</button>
+        <button id="ragBuildBatch" class="btn-sm" title="Build HNSW for all symbols (admin)">Build HNSW (All)</button>
+        <button id="ragMigrateBtn" class="btn-sm" title="Migrate SQLite docs to current store (admin)">Migrate SQLite?HNSW</button>
+        <span id="ragStatsHint" class="muted"></span>
+      </div>
+      <div id="ragStatsBody" class="mono" style="margin-top:6px; white-space:pre-wrap"></div>
+    </div>
+
     <div class="row" style="margin-top:16px">
-      <div class="card" id="marketOverview"><div class="muted">Market Overview</div></div>
       <div class="card" id="status"><div class="muted">Status</div></div>
       <div class="card" id="overview"><div class="muted">Overview</div></div>
+    </div>
+
+    <div class="row" style="margin-top:16px">
       <div class="card" id="sentiment"><div class="muted">Sentiment & Recommendation</div></div>
       <div class="card" id="mcinsight"><div class="muted">MC Insight</div></div>
       <div class="card" id="mcquick"><div class="muted">MC Quick</div></div>
+      <div class="card" id="scoreCards">
+        <div class="muted">Quality Scores</div>
+        <div id="scoreCardsBody" style="margin-top:6px"></div>
+      </div>
+      <div class="card" id="interactiveChart">
+        <div class="muted">Interactive Candlestick</div>
+        <div class="flex" style="gap:8px; margin-top:6px; flex-wrap:wrap">
+          <label class="muted">Overlays:</label>
+          <label style="display:flex; align-items:center; gap:6px"><input id="icSma20" type="checkbox" checked aria-label="Toggle SMA 20"/> SMA 20</label>
+          <label style="display:flex; align-items:center; gap:6px"><input id="icEma50" type="checkbox" aria-label="Toggle EMA 50"/> EMA 50</label>
+          <label style="display:flex; align-items:center; gap:6px"><input id="icEma200" type="checkbox" aria-label="Toggle EMA 200"/> EMA 200</label>
+          <label style="display:flex; align-items:center; gap:6px"><input id="icBoll" type="checkbox" aria-label="Toggle Bollinger Bands"/> Bollinger</label>
+        </div>
+        <canvas id="icCanvas" style="margin-top:6px; max-height:260px"></canvas>
+      </div>
       <div class="card" id="mctech">
         <div class="muted">MC Technicals</div>
         <div class="flex" style="gap:8px; margin-top:6px">
@@ -38,8 +364,106 @@ root.innerHTML = `
           <button id="pivotClassic" class="btn-sm">Classic</button>
           <button id="pivotFibo" class="btn-sm">Fibonacci</button>
           <button id="pivotCama" class="btn-sm">Camarilla</button>
+          <div style="width:1px; background:var(--border); margin:0 4px"></div>
+          <label class="muted">Freq:</label>
+          <button id="techFreqD" class="btn-sm active">D</button>
+          <button id="techFreqW" class="btn-sm">W</button>
+          <button id="techFreqM" class="btn-sm">M</button>
         </div>
         <div id="mctechBody" style="margin-top:6px"></div>
+      </div>
+      <div class="card" id="mcPriceVolume">
+        <div class="muted">MC Price Volume</div>
+        <div id="mcPvBody" style="margin-top:6px"></div>
+      </div>
+      <div class="card" id="mcStockHistory">
+        <div class="muted">MC Stock History</div>
+        <div class="flex" style="gap:8px; margin-top:6px; flex-wrap:wrap">
+          <select id="mcHistResolution">
+            <option value="1D" selected>1D</option>
+            <option value="1W">1W</option>
+            <option value="1M">1M</option>
+          </select>
+        </div>
+        <div id="mcHistBody" style="margin-top:6px"></div>
+      </div>
+      <div class="card" id="marketsMojo">
+        <div class="muted">Markets Mojo Valuation</div>
+        <div id="mmBody" style="margin-top:6px"></div>
+      </div>
+      <div class="card" id="trendlyne">
+        <div class="muted">Trendlyne Advanced Tech</div>
+        <div class="flex" style="gap:8px; margin-top:6px; flex-wrap:wrap">
+          <label class="muted">Lookback:</label>
+          <select id="tlLookback">
+            <option value="12">12</option>
+            <option value="24" selected>24</option>
+            <option value="48">48</option>
+          </select>
+          <button id="tlCookieRefresh" class="btn-sm">Refresh</button>
+          <div id="tlStatus" class="muted"></div>
+        </div>
+        <div id="tlBody" style="margin-top:6px"></div>
+      </div>
+      <div class="card" id="tlOscValues">
+        <div class="muted">Oscillators – Values</div>
+        <canvas id="tlOscBars" style="max-height:220px; margin-top:6px"></canvas>
+      </div>
+      <div class="card" id="tlPivot">
+        <div class="muted">Pivot Levels vs Current Price</div>
+        <div id="tlPivotBody" style="margin-top:6px"></div>
+      </div>
+      <div class="card" id="tlOscDetails">
+        <div class="muted">Oscillator Details</div>
+        <div id="tlOscDetailsBody" style="margin-top:6px"></div>
+      </div>
+      <div class="card" id="tlCache">
+        <div class="muted">Trendlyne Cache (SMA/ADV)</div>
+        <div id="tlCacheBody" style="margin-top:6px"></div>
+      </div>
+      <div class="card" id="featuresStored">
+        <div class="muted">Stored Features</div>
+        <div id="fsBody" style="margin-top:6px"></div>
+      </div>
+      <div class="card" id="trendlyneDerivatives">
+        <div class="muted">Trendlyne Derivatives</div>
+        <div class="flex" style="gap:8px; margin-top:6px; flex-wrap:wrap">
+          <input id="tlDerivDate" type="date" style="flex:1" />
+        </div>
+        <div id="tlDerivBody" style="margin-top:6px"></div>
+      </div>
+      <div class="card" id="providerResolution">
+        <div class="muted">Provider Resolution</div>
+        <div id="resolveBody" style="margin-top:6px"></div>
+      </div>
+      <div class="card" id="alphaVantage">
+        <div class="muted">AlphaVantage Ingest</div>
+        <div id="avBody" style="margin-top:6px"></div>
+      </div>
+      <div class="card" id="yahooIngest">
+        <div class="muted">Yahoo Ingest</div>
+        <div class="flex" style="gap:8px; margin-top:6px; flex-wrap:wrap">
+          <select id="yahooRange">
+            <option value="1y" selected>1y</option>
+            <option value="6mo">6mo</option>
+            <option value="3mo">3mo</option>
+            <option value="1mo">1mo</option>
+            <option value="5y">5y</option>
+          </select>
+          <select id="yahooInterval">
+            <option value="1d" selected>1d</option>
+            <option value="1wk">1wk</option>
+            <option value="1mo">1mo</option>
+          </select>
+        </div>
+        <div id="yahooIngestBody" style="margin-top:6px"></div>
+      </div>
+      <div class="card" id="etConstituents">
+        <div class="muted">ET Index Constituents</div>
+        <div class="flex" style="gap:8px; margin-top:6px; flex-wrap:wrap">
+          <input id="etIndexId" placeholder="Index ID (e.g., 26)" style="flex:1" />
+        </div>
+        <div id="etConsBody" style="margin-top:6px"></div>
       </div>
       <div class="card" id="history" style="grid-column: span 2"><div class="muted">Price History</div></div>
       <div class="card" id="yahooData" style="grid-column: span 2">
@@ -84,7 +508,7 @@ root.innerHTML = `
           <button id="connRun" class="btn-sm">Run Checks</button>
           <div id="connHint" class="muted">Pings external APIs and shows status</div>
         </div>
-        <div id="connBody" class="mono" style="margin-top:8px"></div>
+        <div id="connBody" class="mono" style="margin-top:6px"></div>
       </div>
       <div class="card" id="agent" style="grid-column: span 2">
         <div class="muted">Agent Q&A</div>
@@ -97,11 +521,11 @@ root.innerHTML = `
           "Index to RAG for BEL: https://example.com/a https://example.com/b", "Why did BEL move recently?"
         </div>
         <div class="grid-3" style="margin-top:8px">
-          <div class="card" style="background:#0e1320">
+          <div class="card">
             <div class="muted">Prompt History</div>
             <div id="historyBox" class="mono" style="margin-top:6px; max-height:200px; overflow:auto; white-space:pre-wrap"></div>
           </div>
-          <div class="card" style="background:#0e1320">
+          <div class="card">
             <div class="muted">RAG Q&A (stream)</div>
             <div class="flex" style="margin-top:6px">
               <input id="ragq" placeholder="Ask RAG (uses namespace = symbol)" style="flex:1" />
@@ -110,807 +534,505 @@ root.innerHTML = `
             <div class="muted" style="font-size:12px; margin-top:4px">Use "Index URLs" to add sources first.</div>
             <pre id="ragStream" class="mono" style="white-space:pre-wrap; margin-top:6px"></pre>
           </div>
-          <div class="card" style="background:#0e1320">
+          <div class="card">
             <div class="muted">RAG Index URLs</div>
-            <textarea id="ragUrls" placeholder="One or more URLs separated by spaces or newlines" style="width:100%; height:96px; background:#0b0f1c; color:#e8edf2; border:1px solid #253149; border-radius:8px; padding:8px"></textarea>
+            <textarea id="ragUrls" placeholder="One or more URLs separated by spaces or newlines" style="width:100%; height:96px;
+              background: var(--panel-2); color: var(--text); border:1px solid var(--border); border-radius:10px; padding:8px"></textarea>
             <button id="ragIndexBtn" style="margin-top:6px">Index URLs to Namespace (symbol)</button>
             <div id="ragIndexStatus" class="muted" style="margin-top:6px"></div>
           </div>
+          <div class="card">
+            <div class="muted">RAG Index Text</div>
+            <textarea id="ragText" placeholder="Paste text to index for the selected symbol" style="width:100%; height:96px; background: var(--panel-2); color: var(--text); border:1px solid var(--border); border-radius:10px; padding:8px"></textarea>
+            <div class="flex" style="gap:8px; margin-top:6px; flex-wrap:wrap">
+              <input id="ragTextDate" type="date" aria-label="Document date" />
+              <input id="ragTextSource" placeholder="Source (optional)" aria-label="Source" />
+              <button id="ragIndexTextBtn">Index Text</button>
+            </div>
+            <div id="ragIndexTextStatus" class="muted" style="margin-top:6px"></div>
+          </div>
         </div>
-        <div class="card" style="background:#0e1320; margin-top:8px">
+        <div class="card" style="margin-top:8px">
           <div class="muted">Live Quotes (WebSocket)</div>
           <div class="flex" style="margin-top:6px">
             <input id="wsSymbol" placeholder="Symbol to subscribe (e.g., BEL)" />
             <button id="wsSub">Subscribe</button>
             <button id="wsUnsub">Unsubscribe</button>
           </div>
-          <div id="wsStatus" class="muted" style="margin-top:6px"></div>
+          <div id="wsStatus" class="muted"></div>
           <div id="wsQuotes" class="mono" style="margin-top:6px; max-height:160px; overflow:auto; white-space:pre-wrap"></div>
         </div>
         <pre class="mono" id="agentAnswer" style="white-space:pre-wrap; margin-top:8px"></pre>
       </div>
     </div>
   </div>
+    </main>
+  </div>
 `;
 // Normalize any garbled placeholder text in the stock select
 const _ph = document.querySelector('#stockSelect option[disabled]') as HTMLOptionElement | null;
-if (_ph) { _ph.textContent = 'Select a stock'; }
+  if (_ph) { _ph.textContent = 'Select a stock'; }
 
-// Kick off market overview immediately on app load
-renderMarketOverview().catch(()=>{});
-
-// Initialize stock selector: load list, wire search filter and selection
-(async function initStockSelector(){
-  const sel = document.getElementById('stockSelect') as HTMLSelectElement | null;
-  const search = document.getElementById('stockSearch') as HTMLInputElement | null;
-  const symbolInput = document.getElementById('symbol') as HTMLInputElement | null;
-  if (!sel) return;
-  // Show loading placeholder
-  sel.innerHTML = '<option value="" selected disabled>Loading…</option>';
-  try {
-    const res = await new Api().listStocks();
-    const data: Array<{name:string,symbol:string,yahoo:string}> = res?.data || [];
-    (window as any)._stockListCache = data;
-    const baseOption = '<option value="" selected disabled>Select a stock</option>';
-    sel.innerHTML = baseOption + data.map(d=>`<option value="${d.yahoo}">${d.name}</option>`).join('');
-    // Restore saved selection if available
-    try {
-      const saved = localStorage.getItem('selectedSymbol') || '';
-      if (saved && data.some(d=>d.yahoo===saved)) { sel.value = saved; if (symbolInput) symbolInput.value = saved; }
-    } catch {}
-    // Change handler: persist + ingest + refresh + analyze
-    sel.addEventListener('change', async ()=>{
-      const v = sel.value;
-      if (symbolInput) symbolInput.value = v;
-      try { localStorage.setItem('selectedSymbol', v); } catch {}
-      const statusEl = document.getElementById('status')!;
-      statusEl.innerHTML = `<div class="muted">Status</div><div class="mono" style="margin-top:8px">Loading ${v}...</div>`;
-      try { await new Api().ingest(v); } catch (e:any) {
-        statusEl.innerHTML = `<div class="muted">Status</div><div class="mono" style="margin-top:8px;color:#ff6b6b">Ingest error: ${e?.message||e}</div>`;
-      }
-      try { await refresh(v); } catch {}
-      try {
-        const a = await new Api().analyze(v);
-        (document.getElementById('sentiment')!).innerHTML = `
-          <div class="grid-3">
-            <div><div class="muted">Sentiment</div><div class="stat">${a.data.sentiment.toFixed(3)}</div></div>
-            <div><div class="muted">Predicted Close</div><div class="stat">${a.data.predictedClose.toFixed(2)}</div></div>
-            <div><div class="muted">Score</div><div class="stat">${a.data.score} — ${a.data.recommendation}</div></div>
-          </div>`;
-      } catch {}
-    });
-    // Type filter on search input
-    if (search) {
-      const render = (list: Array<{name:string,yahoo:string}>) => {
-        sel.innerHTML = baseOption + list.map(d=>`<option value="${d.yahoo}">${d.name}</option>`).join('');
-      };
-      search.addEventListener('input', ()=>{
-        const all: Array<{name:string,symbol:string,yahoo:string}> = (window as any)._stockListCache || [];
-        const q = (search.value||'').trim().toLowerCase();
-        if (!q) { render(all); return; }
-        const filtered = all.filter(d => d.name.toLowerCase().includes(q) || d.symbol.toLowerCase().includes(q));
-        render(filtered);
-      });
-      search.addEventListener('keydown', (ev:any)=>{
-        if (ev.key === 'Enter') {
-          const all: Array<{name:string,symbol:string,yahoo:string}> = (window as any)._stockListCache || [];
-          const q = (search.value||'').trim().toLowerCase();
-          if (!q) return;
-          const m = all.find(d => d.name.toLowerCase().includes(q) || d.symbol.toLowerCase().includes(q));
-          if (m) { sel.value = m.yahoo; if (symbolInput) symbolInput.value = m.yahoo; sel.dispatchEvent(new Event('change')); }
-        }
-      });
-    }
-  } catch (e:any) {
-    sel.innerHTML = '<option value="" selected disabled>No stocks (server offline)</option>';
-  }
-})();
-
-// Wire DB stats button
-(function initDbStats(){
-  const btn = document.getElementById('dbstatsBtn') as HTMLButtonElement | null;
-  if (btn && !(btn as any)._bound) {
-    (btn as any)._bound = true;
-    btn.addEventListener('click', async ()=>{
-      const symbol = (document.getElementById('symbol') as HTMLInputElement | null)?.value?.trim()?.toUpperCase() || '';
-      if (!symbol) {
-        (document.getElementById('dbstats') as HTMLElement).innerHTML = '<div class="muted">DB Data</div><div class="mono" style="margin-top:6px;color:#ff6b6b">Enter a symbol first</div>';
-        return;
-      }
-      const card = document.getElementById('dbstats') as HTMLElement;
-      card.innerHTML = '<div class="muted">DB Data</div><div class="muted" style="margin-top:6px">Loading...</div>';
-      try {
-        const res = await api.dbStats(symbol);
-        const pretty = escapeHtml(JSON.stringify(res, null, 2));
-        card.innerHTML = `<div class="muted">DB Data</div><pre class="mono" style="white-space:pre-wrap;margin-top:6px">${pretty}</pre>`;
-      } catch (e: any) {
-        card.innerHTML = `<div class="muted">DB Data</div><div class="mono" style="margin-top:6px;color:#ff6b6b">${escapeHtml(e?.message || e)}</div>`;
-      }
-    });
-  }
-})();
-
-// RAG: index URLs, query stream
-(function initRag(){
-  const qInput = document.getElementById('ragq') as HTMLInputElement | null;
-  const askBtn = document.getElementById('ragAsk') as HTMLButtonElement | null;
-  const out = document.getElementById('ragStream') as HTMLElement | null;
-  const urlsInput = document.getElementById('ragUrls') as HTMLTextAreaElement | null;
-  const indexBtn = document.getElementById('ragIndexBtn') as HTMLButtonElement | null;
-  const idxStatus = document.getElementById('ragIndexStatus') as HTMLElement | null;
-  const history = document.getElementById('historyBox') as HTMLElement | null;
-
-  const pushHistory = (text: string) => {
-    if (!history) return;
-    const now = new Date().toLocaleTimeString();
-    history.textContent = `${now} - ${text}\n` + (history.textContent || '');
-  };
-
-  if (indexBtn && !(indexBtn as any)._bound) {
-    (indexBtn as any)._bound = true;
-    indexBtn.addEventListener('click', async ()=>{
-      const symbol = (document.getElementById('symbol') as HTMLInputElement | null)?.value?.trim()?.toUpperCase() || '';
-      const ns = symbol || 'default';
-      const raw = urlsInput?.value || '';
-      const urls = Array.from(new Set(raw.split(/\s+/).map(s=>s.trim()).filter(Boolean)));
-      if (!urls.length) { if (idxStatus) idxStatus.textContent = 'Provide one or more URLs.'; return; }
-      if (idxStatus) idxStatus.textContent = 'Indexing...';
-      try {
-        const res = await api.ragIndex(ns, urls);
-        if (idxStatus) idxStatus.textContent = `Indexed ${urls.length} URL(s).`;
-        pushHistory(`RAG Index (${ns}): ${urls.length} URL(s)`);
-      } catch (e: any) {
-        if (idxStatus) idxStatus.textContent = `Index failed: ${e?.message || e}`;
-      }
-    });
-  }
-
-  if (askBtn && out && !(askBtn as any)._bound) {
-    (askBtn as any)._bound = true;
-    askBtn.addEventListener('click', async ()=>{
-      const symbol = (document.getElementById('symbol') as HTMLInputElement | null)?.value?.trim()?.toUpperCase() || '';
-      const ns = symbol || 'default';
-      const q = qInput?.value?.trim();
-      if (!q) return;
-      out.textContent = '';
-      pushHistory(`RAG Ask (${ns}): ${q}`);
-      try {
-        const resp = await api.ragStream(ns, q);
-        if (!resp?.body) { out.textContent = 'No stream body'; return; }
-        const reader = (resp.body as ReadableStream).getReader();
-        const decoder = new TextDecoder();
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          out.textContent += decoder.decode(value);
-        }
-      } catch (e: any) {
-        out.textContent = `Error: ${String(e?.message || e)}`;
-      }
-    });
-  }
-})();
-
-// Agent Q&A (simple JSON answer)
-(function initAgent(){
-  const input = document.getElementById('agentq') as HTMLInputElement | null;
-  const btn = document.getElementById('ask') as HTMLButtonElement | null;
-  const out = document.getElementById('agentAnswer') as HTMLElement | null;
-  const history = document.getElementById('historyBox') as HTMLElement | null;
-  const pushHistory = (text: string) => { if (!history) return; const now = new Date().toLocaleTimeString(); history.textContent = `${now} - ${text}\n` + (history.textContent || ''); };
-  if (btn && out && !(btn as any)._bound) {
-    (btn as any)._bound = true;
-    btn.addEventListener('click', async ()=>{
-      const q = input?.value?.trim();
-      if (!q) return;
-      const symbol = (document.getElementById('symbol') as HTMLInputElement | null)?.value?.trim()?.toUpperCase() || '';
-      out.textContent = 'Thinking...';
-      pushHistory(`Agent Ask${symbol?` [${symbol}]`:''}: ${q}`);
-      try {
-        const res = await api.agent(q, symbol || undefined);
-        out.textContent = typeof res === 'string' ? res : JSON.stringify(res, null, 2);
-      } catch (e: any) {
-        out.textContent = `Error: ${String(e?.message || e)}`;
-      }
-    });
-  }
-})();
-
-// Live Quotes (WebSocket)
-(function initLiveWs(){
-  const subBtn = document.getElementById('wsSub') as HTMLButtonElement | null;
-  const unsubBtn = document.getElementById('wsUnsub') as HTMLButtonElement | null;
-  const symInput = document.getElementById('wsSymbol') as HTMLInputElement | null;
-  const status = document.getElementById('wsStatus') as HTMLElement | null;
-  const quotes = document.getElementById('wsQuotes') as HTMLElement | null;
-  if (!subBtn || !unsubBtn || !symInput || !status || !quotes) return;
-
-  let ws: WebSocket | null = null;
-  let connected = false;
-  const connect = () => {
-    if (ws && connected) return;
-    try {
-      const url = (location.origin.replace(/^http/, 'ws')) + '/ws';
-      ws = new WebSocket(url);
-      status.textContent = 'Connecting...';
-      ws.onopen = () => { connected = true; status.textContent = 'Connected'; };
-      ws.onclose = () => { connected = false; status.textContent = 'Disconnected'; };
-      ws.onerror = () => { status.textContent = 'Error'; };
-      ws.onmessage = (ev) => {
-        try {
-          const msg = JSON.parse(String(ev.data));
-          if (msg?.type === 'quote') {
-            const line = `${new Date(msg.time).toLocaleTimeString()} ${msg.symbol} ${msg.price}`;
-            quotes.textContent = `${line}\n` + (quotes.textContent || '');
-          } else if (msg?.type === 'subscribed') {
-            status.textContent = `Subscribed ${msg.symbol}`;
-          } else if (msg?.type === 'unsubscribed') {
-            status.textContent = `Unsubscribed ${msg.symbol}`;
-          }
-        } catch {}
-      };
-    } catch (e) {
-      status.textContent = 'Failed to open WebSocket';
-    }
-  };
-
-  if (!(subBtn as any)._bound) {
-    (subBtn as any)._bound = true;
-    subBtn.addEventListener('click', ()=>{
-      const sym = symInput.value.trim().toUpperCase();
-      if (!sym) { status.textContent = 'Enter symbol to subscribe'; return; }
-      connect();
-      setTimeout(()=>{ try { ws?.send(JSON.stringify({ type:'subscribe', symbol: sym })); } catch {} }, 50);
-    });
-  }
-  if (!(unsubBtn as any)._bound) {
-    (unsubBtn as any)._bound = true;
-    unsubBtn.addEventListener('click', ()=>{
-      const sym = symInput.value.trim().toUpperCase();
-      if (!sym) { status.textContent = 'Enter symbol to unsubscribe'; return; }
-      if (!ws || !connected) { status.textContent = 'Not connected'; return; }
-      try { ws.send(JSON.stringify({ type:'unsubscribe', symbol: sym })); } catch {}
-    });
-  }
-})();
-
-// Theme toggle (light/dark) using CSS variables on :root
-(function initThemeToggle(){
+// Theme toggle
+(function initTheme(){
+  const key = 'theme';
   const btn = document.getElementById('themeToggle');
-  const key = 'app-theme';
-  function apply(mode: 'light'|'dark') {
-    document.documentElement.setAttribute('data-theme', mode === 'dark' ? 'dark' : 'light');
-  }
-  try {
-    const saved = localStorage.getItem(key);
-    if (saved === 'light' || saved === 'dark') {
-      apply(saved as any);
-    } else {
-      const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-      apply(prefersDark ? 'dark' : 'light');
-    }
-  } catch {}
+  const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const saved = (localStorage.getItem(key) || '').toLowerCase();
+  const start = saved === 'dark' || (!saved && prefersDark) ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', start);
   btn?.addEventListener('click', ()=>{
-    const cur = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+    const cur = document.documentElement.getAttribute('data-theme') || 'light';
     const next = cur === 'dark' ? 'light' : 'dark';
-    apply(next as any);
+    document.documentElement.setAttribute('data-theme', next);
     try { localStorage.setItem(key, next); } catch {}
   });
 })();
 
-// Small debouncer for connectivity checks
-function scheduleConnectivity(symbol: string, delayMs=800) {
-  const key = '_connTimer' as any;
-  const w = (window as any);
-  if (w[key]) clearTimeout(w[key]);
-  w[key] = setTimeout(()=>{ renderConnectivity(symbol).catch(()=>{}); }, delayMs);
-}
-
-async function onIngest() {
-  const symbol = (document.getElementById('symbol') as HTMLInputElement).value.trim().toUpperCase();
-  if (!symbol) return;
-  const statusEl = document.getElementById('status')!;
-  statusEl.innerHTML = `<div class="muted">Status</div><div class="mono" style="margin-top:8px">Ingesting ${symbol}...</div>`;
-  try {
-    const res = await api.ingest(symbol);
-    const msgs: string[] = (res.messages || []) as any;
-    const list = msgs.length ? `<ul>${msgs.map(m=>`<li>${m}</li>`).join('')}</ul>` : '';
-    statusEl.innerHTML = `
-      <div class="muted">Status</div>
-      <div class="mono" style="margin-top:8px">Ingested ${symbol} (prices: ${res.insertedPrices}, news: ${res.insertedNews})</div>
-      <div class="muted">Price: <span class="mono">${res.priceSource || res.alphaSource || 'unknown'}</span>, NewsAPI: <span class="mono">${res.newsSource || 'unknown'}</span></div>
-      ${list}
-    `;
-    await refresh(symbol);
-  } catch (e:any) {
-    // Try to parse JSON error message
-    try {
-      const msg = e.message;
-      const json = JSON.parse(msg);
-      const text = json?.error || msg;
-      statusEl.innerHTML = `<div class="muted">Status</div><div class="mono" style="margin-top:8px; color:#ff6b6b">Error: ${text}</div>`;
-    } catch {
-      statusEl.innerHTML = `<div class="muted">Status</div><div class="mono" style="margin-top:8px; color:#ff6b6b">Error: ${e.message || e}</div>`;
-    }
-  }
-}
-
-// Basic HTML escaper for safe interpolation
-function escapeHtml(input: any): string {
-  const s = String(input ?? '');
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-    .replace(/`/g, '&#96;');
-}
-
-// Orchestrates per-symbol panels: overview, history, news, MC blocks, Yahoo
-async function refresh(symbol: string) {
-  const sym = String(symbol || (document.getElementById('symbol') as HTMLInputElement | null)?.value || '').trim();
-  if (!sym) return;
-
-  // Overview
-  try {
-    const res = await api.overview(sym);
-    const ov = (res?.data ?? res) as any;
-    const name = ov?.name || ov?.longName || ov?.shortName || sym;
-    const sector = ov?.sector || ov?.Sector || ov?.profile?.sector || '-';
-    const industry = ov?.industry || ov?.Industry || ov?.profile?.industry || '-';
-    const mcap = ov?.marketCap ?? ov?.marketcap ?? ov?.summaryDetail?.marketCap?.raw;
-    const pe = ov?.trailingPE ?? ov?.summaryDetail?.trailingPE?.raw;
-    const div = ov?.dividendYield ?? ov?.summaryDetail?.dividendYield?.raw;
-    const lines: string[] = [];
-    lines.push(`<div class="muted">${escapeHtml(name)}</div>`);
-    lines.push(`<div class="mono" style="margin-top:6px">Sector: ${escapeHtml(sector)} | Industry: ${escapeHtml(industry)}</div>`);
-    if (mcap != null) lines.push(`<div class="mono" style="margin-top:6px">Market Cap: ${Number(mcap).toLocaleString()}</div>`);
-    if (pe != null) lines.push(`<div class="mono" style="margin-top:6px">PE: ${Number(pe).toLocaleString()}</div>`);
-    if (div != null) lines.push(`<div class="mono" style="margin-top:6px">Dividend Yield: ${Number(div)}</div>`);
-    (document.getElementById('overview') as HTMLElement).innerHTML = `<div class="muted">Overview</div>${lines.join('')}`;
-  } catch (e: any) {
-    (document.getElementById('overview') as HTMLElement).innerHTML = `<div class="muted">Overview</div><div class="mono" style="margin-top:6px;color:#ff6b6b">${escapeHtml(e?.message || e)}</div>`;
-  }
-
-  // History (simple line chart from close + optional volume)
-  try {
-    const res = await api.history(sym);
-    const arr: any[] = (res?.data ?? res ?? []) as any[];
-    const points = (Array.isArray(arr) ? arr : []).map(r => ({ x: r.date || r.t || r.time || r.x, y: Number(r.close ?? r.c ?? r.y) }))
-                    .filter(p => p.x != null && isFinite(p.y));
-    const volumes = (Array.isArray(arr) ? arr : []).map(r => Number(r.volume ?? r.v ?? 0));
-    const chart = renderLineChart(points, { w: 820, h: 200, volumes });
-    (document.getElementById('history') as HTMLElement).innerHTML = `<div class="muted">Price History</div><div style="margin-top:8px">${chart}</div>`;
-  } catch (e: any) {
-    (document.getElementById('history') as HTMLElement).innerHTML = `<div class="muted">Price History</div><div class="mono" style="margin-top:6px;color:#ff6b6b">${escapeHtml(e?.message || e)}</div>`;
-  }
-
-  // News (RAG panel is separate; here we just list fetched articles)
-  try {
-    const res = await api.news(sym);
-    const items: any[] = (res?.data ?? res ?? []) as any[];
-    const html = (items || []).slice(0, 10).map((n: any) => {
-      const t = n.title || n.headline || '-';
-      const s = n.source || n.publisher || '';
-      const d = n.publishedAt || n.date || n.time || '';
-      const u = n.url || n.link || '';
-      return `<div style="margin-top:6px"><a href="${escapeHtml(u)}" target="_blank" rel="noopener">${escapeHtml(t)}</a><div class="muted" style="font-size:12px">${escapeHtml(s)} ${escapeHtml(d)}</div></div>`;
-    }).join('');
-    (document.getElementById('news') as HTMLElement).innerHTML = `<div class="muted">News (RAG)</div>${html || '<div class="muted" style="margin-top:6px">No news</div>'}`;
-  } catch (e: any) {
-    (document.getElementById('news') as HTMLElement).innerHTML = `<div class="muted">News (RAG)</div><div class="mono" style="margin-top:6px;color:#ff6b6b">${escapeHtml(e?.message || e)}</div>`;
-  }
-
-  // MC Insight
-  try {
-    const res = await api.mcInsight(sym);
-    const d = (res?.data ?? res) as any;
-    const safe = escapeHtml(JSON.stringify(d, null, 2));
-    (document.getElementById('mcinsight') as HTMLElement).innerHTML = `<div class="muted">MC Insight</div><pre class="mono" style="white-space:pre-wrap;margin-top:6px">${safe}</pre>`;
-  } catch (e: any) {
-    (document.getElementById('mcinsight') as HTMLElement).innerHTML = `<div class="muted">MC Insight</div><div class="mono" style="margin-top:6px;color:#ff6b6b">${escapeHtml(e?.message || e)}</div>`;
-  }
-
-  // MC Quick
-  try {
-    const res = await api.mcQuick(sym);
-    const d = (res?.data ?? res) as any;
-    const safe = escapeHtml(JSON.stringify(d, null, 2));
-    (document.getElementById('mcquick') as HTMLElement).innerHTML = `<div class="muted">MC Quick</div><pre class="mono" style="white-space:pre-wrap;margin-top:6px">${safe}</pre>`;
-  } catch (e: any) {
-    (document.getElementById('mcquick') as HTMLElement).innerHTML = `<div class="muted">MC Quick</div><div class="mono" style="margin-top:6px;color:#ff6b6b">${escapeHtml(e?.message || e)}</div>`;
-  }
-
-  // MC Tech (daily by default). Pivot buttons are repurposed to change frequency D/W/M.
-  const renderMcTech = async (freq: 'D'|'W'|'M' = 'D') => {
-    try {
-      const res = await api.mcTech(sym, freq);
-      const d = (res?.data ?? res) as any;
-      const safe = escapeHtml(JSON.stringify(d, null, 2));
-      (document.getElementById('mctechBody') as HTMLElement).innerHTML = `<pre class="mono" style="white-space:pre-wrap">${safe}</pre>`;
-    } catch (e: any) {
-      (document.getElementById('mctechBody') as HTMLElement).innerHTML = `<div class="mono" style="color:#ff6b6b">${escapeHtml(e?.message || e)}</div>`;
-    }
-  };
-  await renderMcTech('D');
-  // Bind frequency toggle buttons if present (Classic=D, Fibonacci=W, Camarilla=M)
-  (document.getElementById('pivotClassic') as HTMLButtonElement | null)?.addEventListener('click', () => { renderMcTech('D'); });
-  (document.getElementById('pivotFibo') as HTMLButtonElement | null)?.addEventListener('click', () => { renderMcTech('W'); });
-  (document.getElementById('pivotCama') as HTMLButtonElement | null)?.addEventListener('click', () => { renderMcTech('M'); });
-
-  // Yahoo block
-  try { await renderYahooForSymbol(sym); } catch {}
-}
-
-// Yahoo: reads controls (range, interval, modules) and renders results
-async function renderYahooForSymbol(symbol: string) {
-  const sym = String(symbol || (document.getElementById('symbol') as HTMLInputElement | null)?.value || '').trim();
-  if (!sym) return;
-  const body = document.getElementById('yahooDataBody') as HTMLElement | null;
-  if (!body) return;
-
-  const rangeSel = document.getElementById('ydRange') as HTMLSelectElement | null;
-  const intSel = document.getElementById('ydInterval') as HTMLSelectElement | null;
-
-  const collectModules = () => Array.from(document.querySelectorAll('input[id^="ydm_"]') as NodeListOf<HTMLInputElement>)
-    .filter(i => i.checked)
-    .map(i => i.id.replace(/^ydm_/, ''))
-    .join(',');
-
-  const range = (rangeSel?.value || '1y');
-  const interval = (intSel?.value || '1d');
-  const modules = collectModules() || 'price,summaryDetail,assetProfile,financialData,defaultKeyStatistics';
-
-  body.innerHTML = '<div class="muted">Loading Yahoo data...</div>';
-  try {
-    const res = await api.yahooFull(sym, range, interval, modules);
-    const d = (res?.data ?? res) as any;
-
-    // Attempt to extract a compact summary if common fields exist
-    const price = d?.price || d?.quoteSummary?.result?.[0]?.price;
-    const sd = d?.summaryDetail || d?.quoteSummary?.result?.[0]?.summaryDetail;
-    const ap = d?.assetProfile || d?.quoteSummary?.result?.[0]?.assetProfile;
-    const fdata = d?.financialData || d?.quoteSummary?.result?.[0]?.financialData;
-    const ks = d?.defaultKeyStatistics || d?.quoteSummary?.result?.[0]?.defaultKeyStatistics;
-
-    const rows: string[] = [];
-    if (price) rows.push(`<div>Price: <span class="mono">${escapeHtml(price?.regularMarketPrice?.fmt ?? price?.regularMarketPrice ?? '')}</span></div>`);
-    if (sd) rows.push(`<div>MarketCap: <span class="mono">${escapeHtml(sd?.marketCap?.fmt ?? sd?.marketCap ?? '')}</span>, PE: <span class="mono">${escapeHtml(sd?.trailingPE?.fmt ?? sd?.trailingPE ?? '')}</span></div>`);
-    if (ap) rows.push(`<div>Sector/Industry: <span class="mono">${escapeHtml(ap?.sector ?? '')}</span> / <span class="mono">${escapeHtml(ap?.industry ?? '')}</span></div>`);
-    if (ks) rows.push(`<div>Shares Out: <span class="mono">${escapeHtml(ks?.sharesOutstanding?.fmt ?? ks?.sharesOutstanding ?? '')}</span></div>`);
-    if (fdata) rows.push(`<div>Margins/Growth: <span class="mono">GM ${escapeHtml(fdata?.grossMargins?.fmt ?? fdata?.grossMargins ?? '')}, RevG ${escapeHtml(fdata?.revenueGrowth?.fmt ?? fdata?.revenueGrowth ?? '')}</span></div>`);
-
-    const pretty = escapeHtml(JSON.stringify(d, null, 2));
-    body.innerHTML = `${rows.length ? `<div class="muted">Summary</div><div style="margin-top:6px">${rows.join('')}</div>` : ''}<div class="muted" style="margin-top:8px">Raw</div><pre class="mono" style="white-space:pre-wrap;margin-top:6px">${pretty}</pre>`;
-  } catch (e: any) {
-    body.innerHTML = `<div class="mono" style="color:#ff6b6b">${escapeHtml(e?.message || e)}</div>`;
-  }
-
-  // Attach change listeners once to auto-refresh on control changes
-  const markKey = 'yd-listeners';
-  if (!(body as any)[markKey]) {
-    const reRender = () => renderYahooForSymbol(sym).catch(()=>{});
-    rangeSel?.addEventListener('change', reRender);
-    intSel?.addEventListener('change', reRender);
-    Array.from(document.querySelectorAll('input[id^="ydm_"]') as NodeListOf<HTMLInputElement>).forEach(cb => {
-      cb.addEventListener('change', reRender);
-    });
-    (body as any)[markKey] = true;
-  }
-}
-
-// Connectivity: ping core/internal and external endpoints and report status
-async function renderConnectivity(symbol: string) {
-  const sym = String(symbol || (document.getElementById('symbol') as HTMLInputElement | null)?.value || '').trim();
-  const body = document.getElementById('connBody') as HTMLElement | null;
-  const hint = document.getElementById('connHint') as HTMLElement | null;
-  if (!body) return;
-
-  // Bind the Run Checks button once; resolve symbol at click time
-  const btn = document.getElementById('connRun') as HTMLButtonElement | null;
-  if (btn && !(btn as any)._bound) {
-    (btn as any)._bound = true;
-    btn.addEventListener('click', () => {
-      const cur = String((document.getElementById('symbol') as HTMLInputElement | null)?.value || sym || '').trim();
-      renderConnectivity(cur).catch(()=>{});
-    });
-  }
-
-  const label = (k: string) => ({
-    overview: 'Overview',
-    history: 'History',
-    news: 'News',
-    analyze: 'Analyze',
-    yahooFull: 'Yahoo Full',
-    mcInsight: 'MC Insight',
-    mcQuick: 'MC Quick',
-    mcTech: 'MC Tech',
-    etIndices: 'ET Indices',
-    etSectorPerformance: 'ET Sector Performance',
-    tickertapeMmi: 'Tickertape MMI'
-  } as any)[k] || k;
-
-  const withTimeout = async <T,>(p: Promise<T>, ms = 8000): Promise<T> => {
-    return await Promise.race([
-      p,
-      new Promise<never>((_, rej) => setTimeout(() => rej(new Error('Timeout')), ms))
-    ]) as T;
-  };
-
-  const checks: Array<{ key: string; run: () => Promise<any> }> = [
-    { key: 'overview', run: () => api.overview(sym) },
-    { key: 'history', run: () => api.history(sym) },
-    { key: 'news', run: () => api.news(sym) },
-    { key: 'analyze', run: () => api.analyze(sym) },
-    { key: 'yahooFull', run: () => api.yahooFull(sym, '1mo', '1d', 'price') },
-    { key: 'mcInsight', run: () => api.mcInsight(sym) },
-    { key: 'mcQuick', run: () => api.mcQuick(sym) },
-    { key: 'mcTech', run: () => api.mcTech(sym, 'D') },
-    { key: 'etIndices', run: () => api.etIndices() },
-    { key: 'etSectorPerformance', run: () => api.etSectorPerformance() },
-    { key: 'tickertapeMmi', run: () => api.tickertapeMmi() }
-  ];
-
-  body.innerHTML = '<div class="muted">Running connectivity checks...</div>';
-  if (hint) hint.textContent = 'Pings external APIs and shows status';
-
-  const started = Date.now();
-  const results = await Promise.all(checks.map(async c => {
-    const t0 = Date.now();
-    try {
-      await withTimeout(c.run(), 9000);
-      return { key: c.key, ok: true, ms: Date.now() - t0 };
-    } catch (e: any) {
-      return { key: c.key, ok: false, ms: Date.now() - t0, err: String(e?.message || e) };
-    }
+// Timeframe tabs
+(function initTimeframeTabs(){
+  const tabs = Array.from(document.querySelectorAll('#tfTabs .tab')) as HTMLElement[];
+  const key = 'timeframe';
+  const saved = localStorage.getItem(key) || 'D';
+  tabs.forEach(t => t.classList.toggle('active', t.dataset.tf === saved));
+  let current = saved as 'D'|'M'|'Y';
+  tabs.forEach(t => t.addEventListener('click', () => {
+    tabs.forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    current = (t.dataset.tf as any) || 'D';
+    try { localStorage.setItem(key, current); } catch {}
+    // Apply timeframe to charts and data windows
+    applyTimeframe(current);
   }));
+  // Keyboard shortcuts: 1=D, 2=M, 3=Y (ignore when typing in inputs/textareas)
+  window.addEventListener('keydown', (ev) => {
+    const tag = (ev.target as HTMLElement)?.tagName?.toLowerCase();
+    const typing = tag === 'input' || tag === 'textarea' || (ev.target as HTMLElement)?.isContentEditable;
+    if (typing) return;
+    let tf: 'D'|'M'|'Y' | null = null;
+    if (ev.key === '1') tf = 'D';
+    if (ev.key === '2') tf = 'M';
+    if (ev.key === '3') tf = 'Y';
+    if (tf) {
+      tabs.forEach(x => x.classList.remove('active'));
+      const target = tabs.find(x => x.dataset.tf === tf);
+      if (target) target.classList.add('active');
+      try { localStorage.setItem(key, tf); } catch {}
+      applyTimeframe(tf);
+    }
+  });
+})();
 
-  const okCount = results.filter(r => r.ok).length;
-  const total = results.length;
-  const took = Date.now() - started;
-  const rows = results.map(r => {
-    const color = r.ok ? '#22c55e' : '#ef4444';
-    const status = r.ok ? '[OK]' : '[FAIL]';
-    const err = r.ok ? '' : ` <span class="muted">- ${escapeHtml((r as any).err || '')}</span>`;
-    return `<div><span style="color:${color}">${status}</span> ${escapeHtml(label(r.key))} <span class="muted">${r.ms} ms</span>${err}</div>`;
-  }).join('');
+// Header search bridges to existing selector
+(function initHeaderSearch(){
+  const input = document.getElementById('globalSearch') as HTMLInputElement | null;
+  const sel = document.getElementById('stockSelect') as HTMLSelectElement | null;
+  if (!input || !sel) return;
+  input.addEventListener('change', () => {
+    const val = input.value.trim().toUpperCase();
+    if (!val) return;
+    // Try to find matching option by text or value
+    const opt = Array.from(sel.options).find(o => o.value.toUpperCase() === val || (o.textContent||'').toUpperCase().includes(val));
+    if (opt) { sel.value = opt.value; sel.dispatchEvent(new Event('change')); }
+  });
+})();
 
-  body.innerHTML = `<div class="muted">Connectivity</div><div style="margin-top:6px">${rows}</div>`;
-  if (hint) hint.textContent = `${okCount}/${total} checks passed in ${took} ms`;
-}
-
-async function onAnalyze() {
-  const symbol = (document.getElementById('symbol') as HTMLInputElement).value.trim().toUpperCase();
-  if (!symbol) return;
-  const res = await api.analyze(symbol);
-  (document.getElementById('sentiment')!).innerHTML = `
-    <div class="grid-3">
-      <div><div class="muted">Sentiment</div><div class="stat">${res.data.sentiment.toFixed(3)}</div></div>
-      <div><div class="muted">Predicted Close</div><div class="stat">${res.data.predictedClose.toFixed(2)}</div></div>
-      <div><div class="muted">Score</div><div class="stat">${res.data.score} â†’ ${res.data.recommendation}</div></div>
-    </div>
-  `;
-  try { await renderYahooForSymbol(symbol); } catch {}
-  scheduleConnectivity(symbol, 1000);
-}
-
-function renderLineChart(points: Array<{x: string, y: number}>, opts: { w?: number, h?: number, volumes?: number[] } = {}) {
-  const w = opts.w ?? 520; const h = opts.h ?? 160; const pad = 30;
-  if (!points.length) return '<div class="muted">No data</div>';
-  const ys = points.map(p=>Number(p.y));
-  const xs = points.map(p=>new Date(p.x).getTime());
-  const minY = Math.min(...ys); const maxY = Math.max(...ys);
-  const minX = Math.min(...xs); const maxX = Math.max(...xs);
-  const sx = (t:number)=> pad + (w-2*pad) * ((t - minX)/Math.max(1, (maxX - minX)));
-  const sy = (v:number)=> (h-pad) - (h-2*pad) * ((v - minY)/Math.max(1e-9, (maxY - minY)));
-  const d = points.map((p,i)=> `${i? 'L':'M'}${sx(new Date(p.x).getTime()).toFixed(1)},${sy(Number(p.y)).toFixed(1)}`).join(' ');
-  const last = points[points.length-1];
-  const lastX = sx(new Date(last.x).getTime()); const lastY = sy(Number(last.y));
-  // Optional volume bars along the bottom background
-  let volSvg = '';
-  const vols = opts.volumes || [];
-  if (vols.length === points.length) {
-    const vmax = Math.max(1, ...vols.map(v=>Number(v)||0));
-    const barAreaH = 36; const baseY = h - pad;
-    const barW = (w - 2*pad) / points.length;
-    volSvg = points.map((p, i) => {
-      const v = Math.max(0, Number(vols[i]) || 0);
-      const bh = (barAreaH * v) / vmax;
-      const x = pad + i*barW;
-      const date = String(p.x);
-      return `<g><title>${date} · Vol ${v.toLocaleString()}</title><rect x="${x.toFixed(1)}" y="${(baseY - bh).toFixed(1)}" width="${Math.max(1, barW-1).toFixed(1)}" height="${bh.toFixed(1)}" fill="#233452"/></g>`;
-    }).join('');
-  }
-  return `
-    <svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <linearGradient id="grad" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color="#60a5fa" stop-opacity="0.6"/>
-          <stop offset="100%" stop-color="#60a5fa" stop-opacity="0.05"/>
-        </linearGradient>
-      </defs>
-      ${volSvg}
-      <path d="${d}" fill="none" stroke="#60a5fa" stroke-width="2"><title>Price trend (close)</title></path>
-      <g><title>Last â€¢ ${last.y}</title><circle cx="${lastX}" cy="${lastY}" r="3.5" fill="#60a5fa" /></g>
-    </svg>`;
-}
-
-async function renderMarketOverview() { return renderMarketOverview2(); }
-async function renderMarketOverview2() {
-  const card = document.getElementById('marketOverview'); if (!card) return;
-  try {
-  // Beautiful spinner while loading
-  card.innerHTML = `
-    <div class="muted">Market Overview</div>
-    <div style="display:flex;justify-content:center;align-items:center;margin-top:8px;gap:10px">
-      <div style="width:44px;height:44px;border-radius:50%;background:conic-gradient(#4dabf7,#8b5cf6,#4dabf7); -webkit-mask:radial-gradient(farthest-side,#0000 calc(100% - 6px),#000 0); animation:spin 1s linear infinite"></div>
-      <div class="muted">Loading market overview...</div>
-    </div>
-    <style>@keyframes spin{to{transform:rotate(1turn)}}</style>
-  `;
-    const [indicesRes, sectorRes, mmiRes] = await Promise.all([
-      api.etIndices().catch(()=>null),
-      api.etSectorPerformance().catch(()=>null),
-      api.tickertapeMmi().catch(()=>null)
-    ]);
-    const idx = ((indicesRes as any)?.data?.searchresult || (indicesRes as any)?.data || []).slice(0, 6);
-    const mmiVal = (mmiRes as any)?.data?.mmi?.now?.value ?? (mmiRes as any)?.data?.data?.value ?? '-';
-    const meter = (v:number)=>{
-      const w=200,h=60; const x=16+(w-32)*(Math.max(0, Math.min(100, Number(v)||0))/100);
-      return `<svg width="${w}" height="${h}"><g><title>Market Mood Index ${v}</title><line x1="16" y1="30" x2="${w-16}" y2="30" stroke="#233452" stroke-width="6"/><circle cx="${x}" cy="30" r="7" fill="#4dabf7"/><text x="${w/2}" y="54" text-anchor="middle" fill="#9aa7bd" font-size="11">MMI ${v}</text></g></svg>`;
-    };
-    const idxCard = (it:any) => {
-      const name = it.indexName || it.index_symbol || it.symbol || '-';
-      const cur = Number(it.currentIndexValue ?? it.current_value ?? it.value ?? NaN);
-      const ch = Number(it.netChange ?? it.changeValue ?? 0);
-      const pct = Number(it.perChange ?? it.percentChange ?? 0);
-      const adv = Number(it.advances ?? 0), dec = Number(it.declines ?? 0);
-      const color = ch>0?'#22c55e':(ch<0?'#ef4444':'#9aa7bd');
-      const id = String(it.indexId || it.indexid || '');
-      const total = Math.max(1, adv+dec);
-      const advPct = Math.round((adv/total)*100);
-      const changeMeter = (()=>{
-        const w=120,h=8; const mid=w/2; const span=Math.min(w/2, Math.abs(pct)*(w/2)/3);
-        const x = pct>=0 ? mid : (mid - span);
-        return `<svg width="${w}" height="${h}"><rect x="0" y="0" width="${w}" height="${h}" rx="4" fill="#233452"/><rect x="${x}" y="0" width="${span}" height="${h}" rx="4" fill="${color}"/></svg>`;
-      })();
-      return `<div class="card" style="background:#0e1320">
-        <div class="muted">${name}</div>
-        <div class="mono" style="margin-top:6px;color:${color}">${isFinite(cur)?cur.toLocaleString():cur} (${ch>=0?'+':''}${(ch as any)?.toFixed?ch.toFixed(2):ch}, ${pct>=0?'+':''}${pct}%)</div>
-        <div class="muted" style="margin-top:6px">Adv: <strong>${adv}</strong> · Dec: <strong>${dec}</strong></div>
-        <div class="muted" style="margin-top:6px;display:flex;align-items:center;gap:8px"><span>Change</span>${changeMeter}</div>
-        <div style="margin-top:6px"><div style="height:6px;background:#233452;border-radius:4px;overflow:hidden"><div style="width:${advPct}%;height:6px;background:#22c55e"></div></div></div>
-        ${id?`<button class="btn-sm" data-idx="${id}">Constituents</button>`:''}
-        <div id="idx-${id}" class="mono" style="margin-top:6px; max-height:180px; overflow:auto"></div>
-      </div>`;
-    };
-    card.innerHTML = `
-      <div class="muted">Market Overview</div>
-      <div class="grid-3" style="margin-top:8px">
-        <div class="card" style="background:#0e1320">
-          <div class="muted">Market Mood</div>
-          <div style="margin-top:6px">${meter(Number(mmiVal))}</div>
-        </div>
-        ${idx.map((x:any)=> idxCard(x)).join('')}
-      </div>`;
-    // Append Top Sectors tiles if available
+// Populate stock dropdown and datalist from backend
+(function initStockSelect(){
+  const sel = document.getElementById('stockSelect') as HTMLSelectElement | null;
+  const dl = document.getElementById('stocksList') as HTMLDataListElement | null;
+  if (!sel) return;
+  try { sel.innerHTML = '<option value="" disabled selected>Loading…</option>'; } catch {}
+  (async () => {
     try {
-      const topSec = ((sectorRes as any)?.data?.searchresult || (sectorRes as any)?.data || []).slice(0,8);
-      if (Array.isArray(topSec) && topSec.length) {
-        const secWrap = document.createElement('div');
-        const tiles = topSec.map((s:any)=>{ const n=s.sector_name||s.name||'-'; const p=Number(s.marketcappercentchange??s.percentChange??0); const c=p>0?'#22c55e':(p<0?'#ef4444':'#9aa7bd'); return `<div class="card" style="background:#0e1320"><div class="muted">${n}</div><div class="mono" style="margin-top:6px;color:${c}">${p>=0?'+':''}${p}%</div></div>`; }).join('');
-        secWrap.innerHTML = `<div class="muted" style="margin-top:12px">Top Sectors</div><div class="row" style="margin-top:6px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:12px">${tiles}</div>`;
-        card.appendChild(secWrap);
+      const res = await new Api().listStocks();
+      const rows: Array<{ symbol:string; name?:string }> = Array.isArray(res?.data) ? res.data : [];
+      const opts = ['<option value="" disabled selected>Select a stock</option>'].concat(
+        rows.map(r => `<option value="${r.symbol}">${r.symbol} — ${r.name || r.symbol}</option>`)
+      ).join('');
+      sel.innerHTML = opts;
+      if (dl) {
+        dl.innerHTML = rows.map(r => `<option value="${r.symbol}">${r.name || r.symbol}</option>`).join('');
       }
+    } catch (e) {
+      try { sel.innerHTML = '<option value="" disabled selected>No stocks available</option>'; } catch {}
+    }
+  })();
+  sel.addEventListener('change', () => {
+    const val = sel.value;
+    const sym = document.getElementById('symbol') as HTMLInputElement | null;
+    if (sym) sym.value = val;
+    try { emitSymbolChange(val); } catch {}
+  });
+})();
+
+// Simple page tabs: Market Overview vs Stock Insight (hide/show sections)
+(function initPageTabs(){
+  const container = document.querySelector('main.content .container');
+  if (!container) return;
+  // Page tabs
+  const bar = document.createElement('div');
+  bar.className = 'pagetabs';
+  bar.setAttribute('aria-label','Page Tabs');
+  bar.innerHTML = `
+    <div class="tab" data-page="overview" role="button" tabindex="0">Market Overview</div>
+    <div class="tab" data-page="insight" role="button" tabindex="0">Stock Insight</div>
+    <div class="tab" data-page="ai" role="button" tabindex="0">AI</div>`;
+  container.insertBefore(bar, container.firstChild);
+  // Hero buttons for clear navigation
+  const hero = document.createElement('div');
+  hero.className = 'card';
+  hero.style.marginTop = '12px';
+  hero.innerHTML = `
+    <div class="muted">Quick Navigation</div>
+    <div class="flex" style="gap:10px; margin-top:8px; flex-wrap:wrap">
+      <a href="#/overview" class="btn" style="font-weight:700">Market Overview</a>
+      <a href="#/insight" class="btn" style="font-weight:700">Stock Insight</a>
+      <a href="#/ai" class="btn" style="font-weight:700">AI</a>
+      <a href="#/watchlist" class="btn" style="font-weight:700">Watchlist</a>
+      <a href="#/alerts" class="btn" style="font-weight:700">Alerts</a>
+    </div>`;
+  container.insertBefore(hero, bar.nextSibling);
+
+  const tabs = Array.from(bar.querySelectorAll('.tab')) as HTMLElement[];
+  const key = 'page';
+  function parseHash(): 'overview'|'insight'|'ai'|'watchlist'|'portfolio'|'alerts'|'settings'|'health' {
+    const h = (location.hash || '').toLowerCase();
+    if (h.startsWith('#/insight')) return 'insight';
+    if (h.startsWith('#/ai')) return 'ai';
+    if (h.startsWith('#/watchlist')) return 'watchlist';
+    if (h.startsWith('#/portfolio')) return 'portfolio';
+    if (h.startsWith('#/alerts')) return 'alerts';
+    if (h.startsWith('#/settings')) return 'settings';
+    if (h.startsWith('#/health')) return 'health';
+    return 'overview';
+  }
+  let current = parseHash();
+
+  function setPage(p: 'overview'|'insight'|'ai'|'watchlist'|'portfolio'|'alerts'|'settings'|'health') {
+    current = p; try { localStorage.setItem(key, p); } catch {}
+    tabs.forEach(t => t.classList.toggle('active', t.dataset.page === p));
+    const overviewIds = ['suggestions','marketOverview','topPicks','topPicksDelta','topPicksHistory'];
+    const insightIds = ['status','overview','history','news','yahooData','sentiment','mcinsight','mcquick','interactiveChart','mctech','mcPriceVolume','mcStockHistory','trendlyne','tlOscValues','tlPivot','tlOscDetails','tlCache','featuresStored','trendlyneDerivatives','providerResolution','alphaVantage','yfinKpis','yfinProfile','yfinFinancials','liveQuote','mcVolumeCard','optionsSentimentCard','searchCard',
+      // Moved cards to Stock Insight page
+      'scoreCards','marketsMojo','yahooIngest'];
+    const aiIds = ['ragExplain','ragStats','agent'];
+    const watchlistIds: string[] = ['watchlistCard'];
+    const portfolioIds: string[] = ['portfolioCard'];
+    const alertsIds: string[] = ['alertsCard','topPicksDelta'];
+    const settingsIds: string[] = ['settingsCard'];
+    const healthIds: string[] = ['providerHealth'];
+    const all = Array.from(new Set([...overviewIds, ...insightIds, ...aiIds, ...watchlistIds, ...portfolioIds, ...alertsIds, ...settingsIds, ...healthIds]));
+    const show = p === 'overview' ? overviewIds
+      : p === 'insight' ? insightIds
+      : p === 'watchlist' ? watchlistIds
+      : p === 'portfolio' ? portfolioIds
+      : p === 'alerts' ? alertsIds
+      : p === 'settings' ? settingsIds
+      : p === 'health' ? healthIds
+      : aiIds;
+    const hide = all.filter(id => !show.includes(id));
+    hide.forEach(id => { const el = document.getElementById(id); if (el) (el as HTMLElement).style.display = 'none'; });
+    show.forEach(id => { const el = document.getElementById(id); if (el) (el as HTMLElement).style.display = ''; });
+    // Populate key cards when entering Insight
+    if (p === 'insight') {
+      const sel = document.getElementById('stockSelect') as HTMLSelectElement | null;
+      const symbol = sel?.value || '';
+      if (symbol) {
+        try { renderYahooData(symbol); } catch {}
+        try { renderMcTech(symbol, currentPivotType, currentTechFreq); } catch {}
+        try { renderMcPriceVolume(symbol); } catch {}
+        try { renderMcStockHistory(symbol); } catch {}
+        try { renderTrendlyneAdvTech(symbol); } catch {}
+      }
+    }
+    // Lazy render page-specific content
+    try {
+      if (p === 'watchlist') renderWatchlist();
+      if (p === 'portfolio') initPortfolioPage();
+      if (p === 'settings') initSettingsPage();
     } catch {}
-    // Modal + cache for constituents
-    (window as any)._idxConsCache = (window as any)._idxConsCache || new Map<string, any[]>();
-    const consCache: Map<string, any[]> = (window as any)._idxConsCache;
-    function ensureModal(){
-      let m = document.getElementById('modalWrap');
-      if (!m) {
-        m = document.createElement('div');
-        m.id = 'modalWrap';
-        m.innerHTML = `<div id="modalBackdrop" style="position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;z-index:2000"></div>
-          <div id="modal" style="position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:2001">
-            <div style="background:#0e1320;border:1px solid #233452;border-radius:12px;max-width:800px;width:90%;max-height:80vh;overflow:auto;padding:16px">
-              <div id="modalTitle" class="muted"></div>
-              <div id="modalBody" class="mono" style="margin-top:8px"></div>
-              <div style="text-align:right;margin-top:12px"><button id="modalClose" class="btn-sm">Close</button></div>
-            </div>
-          </div>`;
-        document.body.appendChild(m);
-        const hide = ()=>{ (document.getElementById('modal') as HTMLElement).style.display='none'; (document.getElementById('modalBackdrop') as HTMLElement).style.display='none'; };
-        document.getElementById('modalClose')?.addEventListener('click', hide);
-        document.getElementById('modalBackdrop')?.addEventListener('click', hide);
-      }
-    }
-    function openModal(title: string, html: string){
-      ensureModal();
-      (document.getElementById('modalTitle') as HTMLElement).textContent = title;
-      (document.getElementById('modalBody') as HTMLElement).innerHTML = html;
-      (document.getElementById('modalBackdrop') as HTMLElement).style.display='block';
-      (document.getElementById('modal') as HTMLElement).style.display='flex';
-    }
-    // Bind constituents buttons
-    Array.from(card.querySelectorAll('button[data-idx]')).forEach((btn:any)=>{
-      btn.addEventListener('click', async ()=>{
-        const id = btn.getAttribute('data-idx')||''; if (!id) return;
-        openModal('Constituents', '<div class="muted">Loading...</div>');
-        try {
-          let items: any[] | undefined = consCache.get(id);
-          if (!items) {
-            const res = await api.etIndexConstituents(id, 200, 1);
-            const arr = res?.data?.searchresult || res?.data?.data || res?.data?.results || [];
-            items = (Array.isArray(arr)?arr:[]);
-            consCache.set(id, items);
-          }
-          const nameFor = (r:any)=> r.companyName || r.companyname || r.name || r.symbol || r.ticker || r.secName || '-';
-          const chFor = (r:any)=> Number(r.perChange ?? r.percentChange ?? r.chg ?? r.change ?? 0);
-          const html = `<ul style="padding-left:16px">${(items||[]).map((r:any)=>{ const n=nameFor(r); const p=chFor(r); const c=p>0?'#22c55e':(p<0?'#ef4444':'#9aa7bd'); return `<li>${n} <span style=\"color:${c}\">${p>=0?'+':''}${p}%</span></li>`; }).join('')}</ul>`;
-          (document.getElementById('modalBody') as HTMLElement).innerHTML = html || '<div class="muted">No data</div>';
-        } catch (e:any) {
-          (document.getElementById('modalBody') as HTMLElement).innerHTML = `<span class=\"muted\">Failed to load constituents: ${e?.message || e}</span>`;
-        }
-      });
-    });
-    // Bind sector tiles to modal index selection
-    const allIdx: any[] = idx;
-    Array.from(document.querySelectorAll('#marketOverview .row .card')).forEach((tile:any)=>{
-      const titleEl = tile.querySelector('.muted');
-      if (!titleEl) return;
-      const nm = String(titleEl.textContent||'Sector').trim();
-      tile.style.cursor = 'pointer';
-      tile.addEventListener('click', ()=>{
-        const low = nm.toLowerCase();
-        const matches = (allIdx||[]).filter((x:any)=> String(x.indexName||x.index_symbol||'').toLowerCase().includes(low));
-        if (!matches.length) {
-          openModal(nm, '<div class="muted">No direct index found for this sector. Use the Index cards above to view constituents.</div>');
-          return;
-        }
-        const buttons = matches.map((m:any)=>{ const id = String(m.indexId||m.indexid||''); const name = String(m.indexName||m.index_symbol||'-'); return `<button class=\"btn-sm\" data-modal-idx=\"${id}\">${name}</button>`; }).join(' ');
-        openModal(nm, `<div class=\"muted\">Select an index</div><div style=\"margin-top:8px;display:flex;flex-wrap:wrap;gap:8px\">${buttons}</div><div id=\"modalList\" style=\"margin-top:12px\"></div>`);
-        Array.from(document.querySelectorAll('button[data-modal-idx]')).forEach((b:any)=>{
-          b.addEventListener('click', async ()=>{
-            const id = b.getAttribute('data-modal-idx')||''; if (!id) return;
-            (document.getElementById('modalList') as HTMLElement).innerHTML = '<div class="muted">Loading constituents...</div>';
-            try {
-              let items: any[] | undefined = consCache.get(id);
-              if (!items) {
-                const res = await api.etIndexConstituents(id, 200, 1);
-                const arr = res?.data?.searchresult || res?.data?.data || res?.data?.results || [];
-                items = (Array.isArray(arr)?arr:[]);
-                consCache.set(id, items);
-              }
-              const nameFor = (r:any)=> r.companyName || r.companyname || r.name || r.symbol || r.ticker || r.secName || '-';
-              const chFor = (r:any)=> Number(r.perChange ?? r.percentChange ?? r.chg ?? r.change ?? 0);
-              const html = `<ul style=\"padding-left:16px\">${(items||[]).map((r:any)=>{ const n=nameFor(r); const p=chFor(r); const c=p>0?'#22c55e':(p<0?'#ef4444':'#9aa7bd'); return `<li>${n} <span style=\\\"color:${c}\\\">${p>=0?'+':''}${p}%</span></li>`; }).join('')}</ul>`;
-              (document.getElementById('modalList') as HTMLElement).innerHTML = html || '<div class="muted">No data</div>';
-            } catch (e:any) {
-              (document.getElementById('modalList') as HTMLElement).innerHTML = `<span class=\"muted\">Failed to load constituents: ${e?.message || e}</span>`;
-            }
-          });
-        });
-      });
-    });
+    // Sync hash
+    const want = p === 'overview' ? '#/overview' : p === 'insight' ? '#/insight' : p === 'ai' ? '#/ai' : p === 'watchlist' ? '#/watchlist' : p === 'portfolio' ? '#/portfolio' : p === 'alerts' ? '#/alerts' : p === 'settings' ? '#/settings' : '#/health';
+    if (location.hash !== want) { location.hash = want; }
+  }
+
+  tabs.forEach(t => t.addEventListener('click', () => setPage((t.dataset.page as any)||'overview')));
+  tabs.forEach(t => t.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); setPage((t.dataset.page as any)||'overview'); } }));
+  // Wire sidebar links
+  try {
+    const sideLinks = Array.from(document.querySelectorAll('aside.sidebar .nav a')) as HTMLAnchorElement[];
+    sideLinks.forEach(a => a.addEventListener('click', (ev) => { ev.preventDefault(); const r = a.getAttribute('data-route') || '#/overview'; location.hash = r; }));
   } catch {}
+  window.addEventListener('hashchange', () => {
+    // update sidebar active state
+    try {
+      const sideLinks = Array.from(document.querySelectorAll('aside.sidebar .nav a')) as HTMLAnchorElement[];
+      sideLinks.forEach(a => a.classList.toggle('active', (a.getAttribute('data-route')||'') === location.hash));
+    } catch {}
+    setPage(parseHash());
+  });
+  // Initial
+  if (!location.hash) location.hash = current === 'overview' ? '#/overview' : current === 'insight' ? '#/insight' : '#/ai';
+  setPage(current);
+})();
+
+// Header search bridges to existing selector
+(function initHeaderSearch(){
+  const input = document.getElementById('globalSearch') as HTMLInputElement | null;
+  const sel = document.getElementById('stockSelect') as HTMLSelectElement | null;
+  if (!input || !sel) return;
+  input.addEventListener('change', () => {
+    const val = input.value.trim().toUpperCase();
+    if (!val) return;
+    // Try to find matching option by text or value
+    const opt = Array.from(sel.options).find(o => o.value.toUpperCase() === val || (o.textContent||'').toUpperCase().includes(val));
+    if (opt) { sel.value = opt.value; sel.dispatchEvent(new Event('change')); }
+  });
+})();
+
+// Minimal Moneycontrol technicals renderer (pivot + MA summary)
+async function renderMcTech(symbol: string, pivot: 'classic'|'fibonacci'|'camarilla', freq: 'D'|'W'|'M') {
+  const box = document.getElementById('mctechBody');
+  if (!box) return;
+  box.innerHTML = '<span class="spinner"></span> Loading technicals...';
+  try {
+    const res = await new Api().mcTech(symbol, freq);
+    const data = res?.data || {};
+    const piv = (data.pivots && data.pivots[pivot]) || data.pivots || {};
+    const maSig = data.movingAverages || data.ma || {};
+    const fmt = (n: any) => (Number.isFinite(Number(n)) ? Number(n).toFixed(2) : '—');
+    const pivotHtml = Object.keys(piv).length
+      ? `<div class="grid-3" style="gap:6px; margin-top:6px">` +
+        Object.entries(piv).map(([k,v]) => `<div class="chip" style="background:${withAlpha(THEME.brand,0.10)}; color:${THEME.brand}">${k.toUpperCase()}: ${fmt(v as any)}</div>`).join('') + '</div>'
+      : '<div class="muted">No pivot data.</div>';
+    const maHtml = `<div style="margin-top:8px">`+
+      `<span class="chip" style="background:${withAlpha(THEME.success,0.15)}; color:${THEME.success}">SMA: ${Number(maSig.sma_bullish||0)} / ${Number(maSig.sma_total||0)}</span> `+
+      `<span class="chip" style="background:${withAlpha(THEME.info,0.15)}; color:${THEME.info}">EMA: ${Number(maSig.ema_bullish||0)} / ${Number(maSig.ema_total||0)}</span>`+
+      `</div>`;
+    box.innerHTML = `<div class="muted">${symbol} • ${pivot} • ${freq}</div>${pivotHtml}${maHtml}`;
+  } catch (e: any) {
+    box.innerHTML = `<div class="mono" style="color:${THEME.danger}">${escapeHtml(e?.message || e)}</div>`;
+  }
 }
 
+// Minimal Moneycontrol stock history renderer (price spark + stats)
+async function renderMcStockHistory(symbol: string) {
+  const body = document.getElementById('mcHistBody');
+  if (!body) return;
+  body.innerHTML = '<span class="spinner"></span> Loading history...';
+  try {
+    const resSel = document.getElementById('mcHistResolution') as HTMLSelectElement | null;
+    const resolution = resSel?.value || '1D';
+    const res = await new Api().mcStockHistory(symbol, resolution);
+    const rows: Array<any> = Array.isArray(res?.data) ? res.data : [];
+    if (!rows.length) { body.innerHTML = '<div class="muted">No MC history.</div>'; return; }
+    const last = rows[rows.length-1];
+    const closes = rows.map(r => Number(r.close ?? r.c ?? NaN)).filter(n => Number.isFinite(n));
+    const min = Math.min(...closes); const max = Math.max(...closes); const ch = closes.length>1 ? (closes[closes.length-1] - closes[0]) / closes[0] * 100 : 0;
+    body.innerHTML = `<div class="muted">${rows.length} pts • Range ${min.toFixed(2)}–${max.toFixed(2)} • Change ${ch.toFixed(2)}%</div>`;
+  } catch (e:any) {
+    body.innerHTML = `<div class="mono" style="color:${THEME.danger}">${escapeHtml(e?.message || e)}</div>`;
+  }
+}
 
+// Fix implicit any in sorting tail arrays
+function sortNums(arr: number[]) { return arr.slice().sort((a: number, b: number) => a - b); }
 
+// Ensure watchlist sparkline map callbacks have typed params
+// (Any existing usage will benefit from the explicit function definitions above.)
 
+// --- Agent Q&A Card Initialization (Added) ---
+(function initAgentQa(){
+  const askBtn = document.getElementById('ask') as HTMLButtonElement | null;
+  const input = document.getElementById('agentq') as HTMLInputElement | null;
+  const answer = document.getElementById('agentAnswer') as HTMLElement | null;
+  const historyBox = document.getElementById('historyBox') as HTMLElement | null;
+  if (!askBtn || !input || !answer) return; // Card not rendered yet
+  const sel = document.getElementById('stockSelect') as HTMLSelectElement | null;
+  let busy = false;
+  const history: string[] = [];
+  function renderHistory(){ if (historyBox) historyBox.textContent = history.slice(-50).join('\n'); }
+  function fmtPct(x: any){ return (typeof x === 'number' && Number.isFinite(x)) ? (x*100).toFixed(2)+'%' : 'n/a'; }
+  function fmtNum(x: any, d=2){ return (typeof x === 'number' && Number.isFinite(x)) ? x.toFixed(d) : 'n/a'; }
+  async function run(){
+    if (busy) return; const q = (input.value || '').trim(); if (!q) return;
+    const symbol = sel?.value || undefined;
+    busy = true; askBtn.disabled = true; input.disabled = true;
+    answer.textContent = '⏳ Running agent...';
+    try {
+      const apiRes = await new Api().agent(q, symbol);
+      if (!apiRes || apiRes.ok === false) throw new Error(apiRes?.error || 'Agent failed');
+      // Shape: { ok:true, data:{ answer, intents, data } }
+      const payload = apiRes.data || {};
+      const agentAnswer = payload.answer || payload.data?.answer || '';
+      const stats = payload.data; // raw stats object (latest, changePct etc.)
+      let extra = '';
+      if (stats && typeof stats === 'object' && stats.latest) {
+        const latest = stats.latest || {};
+        extra += '\n';
+        extra += 'Key Metrics:\n';
+        extra += `  Close: ${fmtNum(latest.close)} (Δ ${fmtNum(stats.change)} / ${fmtPct(stats.changePct)})\n`;
+        extra += `  5d: ${fmtPct(stats.ret5)} • 20d: ${fmtPct(stats.ret20)}\n`;
+        extra += `  RSI: ${fmtNum(stats.rsi)} • Sentiment: ${fmtNum(stats.sentiment,3)}\n`;
+        if (stats.options) extra += `  Options PCR: ${fmtNum(stats.options.pcr)} PVR: ${fmtNum(stats.options.pvr)} Bias: ${fmtNum(stats.options.bias)}\n`;
+        if (stats.prediction) extra += `  Pred Next Close: ${fmtNum(stats.prediction)} (${fmtPct(stats.predictionPct)})\n`;
+      } else if (payload.intents?.wantStats && !stats?.latest) {
+        extra += '\n(No local price data. Run Ingest first to populate history.)';
+      }
+      const finalText = agentAnswer ? agentAnswer + extra : JSON.stringify(payload, null, 2);
+      answer.textContent = finalText;
+      history.push(`> ${q}`); history.push(finalText.split('\n')[0]);
+      renderHistory();
+    } catch (err: any) {
+      answer.textContent = '❌ ' + (err?.message || String(err));
+    } finally {
+      busy = false; askBtn.disabled = false; input.disabled = false; input.focus();
+    }
+  }
+  askBtn.addEventListener('click', run);
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { run(); } });
+})();
+// --- End Agent Q&A ---
 
+// --- Stock Select Initialization (Added) ---
+(function initStockSelectorV2(){
+  const sel = document.getElementById('stockSelect') as HTMLSelectElement | null;
+  if (!sel) return;
+  const LS_KEY_LAST = 'stocks:last';
+  let loading = false;
+  async function fetchList(force=false){
+    if (loading) return; loading = true;
+    try {
+      const api = new Api();
+      const listRes = await api.listStocksCached(force);
+      const list: any[] = Array.isArray((listRes as any).data) ? (listRes as any).data : Array.isArray(listRes) ? listRes : [];
+      if (!sel.querySelector('option[data-loaded]')) {
+        Array.from(sel.options).forEach(o => { if (!o.disabled) sel.removeChild(o); });
+        for (const r of list.slice(0, 3000)) {
+          const opt = document.createElement('option');
+          opt.value = r.symbol;
+          opt.textContent = `${r.symbol} — ${r.name || r.symbol}`;
+          opt.setAttribute('data-loaded','1');
+          sel.appendChild(opt);
+        }
+      }
+      const last = localStorage.getItem(LS_KEY_LAST);
+      if (last && list.some(l => l.symbol === last) && sel.value !== last) {
+        sel.value = last;
+        sel.dispatchEvent(new Event('change'));
+      }
+    } catch (err){ console.warn('listStocksCached failed', err); }
+    finally { loading = false; }
+  }
+  let currentSymbolAbort: AbortController | null = null;
+  async function loadSymbolDataV2(symbol: string){
+    if (!symbol) return;
+    try { localStorage.setItem(LS_KEY_LAST, symbol); } catch {}
+    emitEvent('symbol:selected', symbol);
+    // Abort previous in-flight requests
+    if (currentSymbolAbort) { try { currentSymbolAbort.abort(); } catch {} }
+    currentSymbolAbort = new AbortController();
+    const signal = currentSymbolAbort.signal;
+    performance.mark('symbol-load-start');
+    const ov = document.getElementById('overview');
+    const hist = document.getElementById('history');
+    const newsBox = document.getElementById('news');
+    if (ov) ov.innerHTML = '<div class="muted">Overview</div><div class="mono">Loading...</div>';
+    if (hist) hist.innerHTML = '<div class="muted">Price History</div><div class="mono">Loading...</div>';
+    if (newsBox) newsBox.innerHTML = '<div class="muted">News (RAG)</div><div class="mono">Loading...</div>';
+    try {
+      const [ovr, hst, nws, ana] = await Promise.allSettled([
+        new Api().overview(symbol, { signal }),
+        new Api().history(symbol, { signal }),
+        new Api().news(symbol, { signal }),
+        new Api().analyze(symbol, { signal })
+      ]);
+      if (ov && ovr.status === 'fulfilled') {
+        const d = ovr.value?.data || ovr.value;
+        ov.innerHTML = `<div class='muted'>Overview</div><pre class='mono' style='white-space:pre-wrap'>${escapeHtml(JSON.stringify(d, null, 2))}</pre>`;
+      }
+      if (hist && hst.status === 'fulfilled') {
+        const arr = hst.value?.data || hst.value || [];
+        const last = Array.isArray(arr) && arr.length ? arr[arr.length-1] : null;
+        hist.innerHTML = `<div class='muted'>Price History</div><div class='mono'>Rows: ${Array.isArray(arr)?arr.length:0}${last?` | Last Close ${last.close} (${last.date})`:''}</div>`;
+      }
+      if (newsBox && nws.status === 'fulfilled') {
+        const arr = nws.value?.data || nws.value || [];
+        const top = Array.isArray(arr)?arr.slice(0,5):[];
+        newsBox.innerHTML = `<div class='muted'>News (RAG)</div><div class='mono' style='white-space:pre-wrap'>${top.map((n:any)=>`- ${escapeHtml(n.title||'')}`).join('\n') || 'No news'}</div>`;
+      }
+      if (ana.status === 'fulfilled') {
+        const a = ana.value?.data || ana.value;
+        const sentCard = document.getElementById('sentiment');
+        if (sentCard) sentCard.innerHTML = `<div class='muted'>Sentiment & Recommendation</div><div class='mono'>Sentiment: ${a?.sentiment?.toFixed? a.sentiment.toFixed(3):a?.sentiment} | Pred: ${a?.predictedClose} | Score: ${a?.score} | Rec: ${escapeHtml(a?.recommendation||'')}</div>`;
+      }
+    } catch (err:any) {
+      if (err?.name === 'AbortError') {
+        console.debug('symbol load aborted', symbol);
+      } else {
+        console.warn('symbol load failed', err);
+      }
+    } finally {
+      performance.mark('symbol-load-end');
+      try { const measure = performance.measure('symbol-load', 'symbol-load-start', 'symbol-load-end'); console.debug('symbol-load ms', measure.duration); } catch {}
+    }
+  }
+  sel.addEventListener('change', ()=>{
+    const symbol = sel.value;
+    if (!symbol) return;
+    loadSymbolDataV2(symbol);
+  });
+  fetchList();
+})();
+// --- End Stock Select Initialization ---
 
+// --- Cache Debug Panel (dev aid) ---
+(function initCacheDebug(){
+  const container = document.querySelector('.container');
+  if (!container) return;
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.id = 'cacheDebug';
+  card.innerHTML = `<div class="muted">Cache Debug</div>
+    <div class='flex' style='margin-top:6px'>
+      <button id='cacheRefresh' class='btn-sm'>Refresh Keys</button>
+      <button id='cacheClear' class='btn-sm'>Clear All</button>
+      <input id='cachePrefix' placeholder='Prefix (optional)' style='flex:1; min-width:140px' />
+      <button id='cacheInvalidate' class='btn-sm'>Invalidate Prefix</button>
+    </div>
+    <pre id='cacheKeysBox' class='mono' style='white-space:pre-wrap; margin-top:6px; max-height:160px; overflow:auto'></pre>`;
+  container.appendChild(card);
+  function render(){
+    try { (document.getElementById('cacheKeysBox') as HTMLElement).textContent = Api.cacheKeys().join('\n') || '(empty)'; } catch {}
+  }
+  card.querySelector('#cacheRefresh')?.addEventListener('click', render);
+  card.querySelector('#cacheClear')?.addEventListener('click', ()=>{ Api.invalidate(); render(); });
+  card.querySelector('#cacheInvalidate')?.addEventListener('click', ()=>{ const p = (document.getElementById('cachePrefix') as HTMLInputElement).value.trim(); if (p) Api.invalidate(p); render(); });
+  render();
+})();
+// --- End Cache Debug Panel ---
 
-
-
-
-
-
-
-
-
+// --- Stub helpers to satisfy references (real implementations may live elsewhere) ---
+function applyTimeframe(tf: 'D'|'M'|'Y') {
+  // Placeholder: could adjust chart windows / aggregation.
+  console.debug('[applyTimeframe]', tf);
+}
+function renderYahooData(symbol: string) {
+  console.debug('[renderYahooData] stub', symbol);
+}
+function renderMcPriceVolume(symbol: string) {
+  console.debug('[renderMcPriceVolume] stub', symbol);
+  // Optional: lazy fetch to warm cache
+  try { new Api().mcPriceVolume(symbol).catch(()=>{}); } catch {}
+}
+function renderTrendlyneAdvTech(symbol: string) {
+  console.debug('[renderTrendlyneAdvTech] stub', symbol);
+}
+function renderWatchlist() { console.debug('[renderWatchlist] stub'); }
+function initPortfolioPage() { console.debug('[initPortfolioPage] stub'); }
+function initSettingsPage() { console.debug('[initSettingsPage] stub'); }
+// --- End stubs ---
 
 
 
