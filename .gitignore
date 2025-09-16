@@ -12,6 +12,7 @@
 **/.env
 **/.env_*
 server/stock.db*
+./server/stock.db*
 server/server.out.log
 server/server.err.log
 server/server/.rag/*
@@ -19,3 +20,6 @@ server/server/.rag/*
 .vscode/
 .idea/
 ml-svc/__pycache__/app.cpython-311.pyc
+server/stock.db
+server/stock.db-shm
+server/stock.db-wal
