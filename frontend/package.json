@@ -1,20 +1,53 @@
 {
   "name": "stock-mcp-frontend",
-  "version": "1.0.0",
+  "version": "2.0.0",
+  "description": "Modern Stock Analytics Dashboard with Visual Decision Making",
   "scripts": {
     "start": "vite --open",
-    "dev": "vite --open",
-    "dev:host": "vite --host --open"
+    "dev": "vite --open --host",
+    "dev:host": "vite --host --open",
+    "build": "vite build",
+    "preview": "vite preview",
+    "type-check": "tsc --noEmit"
   },
   "dependencies": {
     "@angular/common": "^18.0.0",
     "@angular/core": "^18.0.0",
     "@angular/platform-browser": "^18.0.0",
+    "chart.js": "^4.4.0",
+    "chartjs-adapter-date-fns": "^3.0.0",
+    "chartjs-plugin-annotation": "^3.0.1",
+    "chartjs-plugin-zoom": "^2.0.1",
+    "date-fns": "^3.6.0",
+    "d3": "^7.8.5",
     "rxjs": "^7.8.1",
-    "zone.js": "^0.14.7"
+    "zone.js": "^0.14.7",
+    "lodash-es": "^4.17.21",
+    "color": "^4.2.3",
+    "canvas-confetti": "^1.9.2"
   },
   "devDependencies": {
     "typescript": "^5.6.2",
-    "vite": "^5.4.6"
-  }
+    "vite": "^5.4.6",
+    "@types/d3": "^7.4.3",
+    "@types/lodash-es": "^4.17.12",
+    "@types/color": "^3.0.6",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.41"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "stock-analysis",
+    "trading",
+    "dashboard",
+    "visualization",
+    "analytics",
+    "ai-powered",
+    "real-time",
+    "financial-data"
+  ],
+  "author": "Stock MCP Suite",
+  "license": "MIT"
 }

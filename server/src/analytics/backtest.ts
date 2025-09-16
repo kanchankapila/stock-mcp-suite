@@ -2,6 +2,8 @@
 // Buy when fast crosses above slow, sell when crosses below.
 // Returns equity curve & summary stats.
 
+import { scoreStrategy } from './scoring.js';
+
 type Pt = { date: string, close: number };
 
 function sma(values: number[], w: number) {
@@ -61,13 +63,4 @@ export function backtestSMA(data: Pt[], fast=10, slow=20) {
   return { trades, equity, totalReturn, fast, slow };
 }
 
-export function scoreStrategy(sentiment: number, momReturn: number) {
-  // Simple 0-100 score: combine normalized sentiment and momentum
-  const s = Math.max(-1, Math.min(1, sentiment));
-  const m = Math.max(-0.5, Math.min(0.5, momReturn)); // clamp +/-50%
-  const score = Math.round(( (s+1)/2 * 50 ) + ( (m+0.5)/1.0 * 50 )); // 0..100
-  let recommendation = 'HOLD';
-  if (score >= 66) recommendation = 'BUY';
-  else if (score <= 33) recommendation = 'SELL';
-  return { score, recommendation };
-}
+export { scoreStrategy };

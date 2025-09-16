@@ -1,0 +1,27 @@
+﻿graph LR
+  FE[Frontend Angular] --> API[Express Server (Node.js + TS)]
+  FE --> API
+
+  subgraph Server
+    API --> DB[(SQLite: stock.db)]
+    API --> RAG[[RAG Store\n(memory | hnsw | sqlite | chroma)]]
+    API -. puppeteer .-> TLH[Trendlyne Headless Login]
+
+    subgraph Background Tasks
+      PREF[Yahoo Prefetcher] --> API
+      NEWS[News Prefetcher] --> API
+      MCT[MC Tech Prefetcher] --> API
+      RAGAUTO[RAG Auto Tasks (migrate/build)] --> RAG
+    end
+  end
+
+  API --> YF[Yahoo Finance APIs]
+  API --> STQ[Stooq CSV]
+  API --> NEWSAPI[NewsAPI]
+  API --> MC[Moneycontrol APIs]
+  API --> TL[Trendlyne APIs]
+  API --> ET[ET Markets APIs]
+  API --> TT[Tickertape API]
+  API --> MM[MarketsMojo API]
+
+

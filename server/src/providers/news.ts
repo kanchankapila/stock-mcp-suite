@@ -1,5 +1,6 @@
 import fetch from 'node-fetch';
 import { logger } from '../utils/logger.js';
+import { fetchJson } from '../utils/http.js';
 
 const NEWS_BASE = 'https://newsapi.org/v2/everything';
 
@@ -19,9 +20,8 @@ export async function fetchNews(queryText: string, apiKey?: string) {
     // Example shape: https://newsapi.org/v2/everything?q=$name&from=YYYY-MM-DD&sortBy=popularity&apiKey=API_KEY
     const url = `${NEWS_BASE}?q=${q}&from=${fromDate}&to=${to}&sortBy=popularity&language=en&pageSize=25&apiKey=${apiKey}`;
     logger.info({ q: queryText, from: fromDate, to, sortBy:'popularity' }, 'newsapi_fetch');
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`NewsAPI error: ${res.status}`);
-    return res.json();
+    const json = await fetchJson(url, { timeoutMs: 8000, retries: 2, retryDelayMs: 200 });
+    return json;
   } catch (err) {
     logger.error({ err, q: queryText }, 'newsapi_failed');
     throw err;

@@ -1,130 +1,172 @@
 import type { Server as HttpServer } from 'http';
-import { WebSocketServer } from 'ws';
-import { fetchYahooQuotesBatch, fetchYahooDaily, parseYahooDaily } from '../providers/yahoo.js';
-import { resolveTicker } from '../utils/ticker.js';
-import { insertPriceRow, upsertStock, latestPrice } from '../db.js';
+import { WebSocketServer, WebSocket } from 'ws';
 import { logger } from '../utils/logger.js';
+import zlib from 'zlib';
 
-type Client = { ws: import('ws').WebSocket, subs: Set<string> };
+type Client = { ws: WebSocket; subs: Set<string> };
+
+// Upstream Yahoo streamer singleton connection
+let upstream: WebSocket | null = null;
+let upstreamReady = false;
+let upstreamConnecting = false;
+const upstreamSubs = new Set<string>();
+let upstreamReconnectAttempts = 0;
+
+// Local subscription registry symbol -> Set<Client>
+const symbolClients = new Map<string, Set<Client>>();
+// Synthetic fallback prices
+const syntheticPrices = new Map<string, number>();
+let syntheticTimer: NodeJS.Timeout | null = null;
+
+function ensureSyntheticLoop() {
+  if (syntheticTimer) return;
+  syntheticTimer = setInterval(() => {
+    const nowIso = new Date().toISOString();
+    for (const [sym, clients] of symbolClients.entries()) {
+      if (clients.size === 0) continue;
+      if (upstreamReady) continue; // real feed active, skip
+      let p = syntheticPrices.get(sym) ?? (100 + Math.random() * 50);
+      const drift = (Math.random() - 0.5) * 0.4; // small movement
+      p = Math.max(1, p + drift);
+      syntheticPrices.set(sym, p);
+      const msg = JSON.stringify({ type: 'quote', symbol: sym, price: Number(p.toFixed(2)), time: nowIso, source: 'synthetic' });
+      for (const c of clients) safeSend(c.ws, msg);
+    }
+  }, 3000);
+}
+
+function connectUpstream() {
+  if (upstreamReady || upstreamConnecting) return;
+  upstreamConnecting = true;
+  const url = 'wss://streamer.finance.yahoo.com';
+  logger.info({ url }, 'yahoo_ws_connecting');
+  upstream = new WebSocket(url, { perMessageDeflate: false });
+  const onOpen = () => {
+    upstreamReady = true; upstreamConnecting = false; upstreamReconnectAttempts = 0;
+    logger.info('yahoo_ws_connected');
+    // Resubscribe all symbols
+    if (upstreamSubs.size) sendUpstreamSubscribe(Array.from(upstreamSubs));
+  };
+  const onClose = (code: number, reason: Buffer) => {
+    logger.warn({ code, reason: reason.toString() }, 'yahoo_ws_closed');
+    upstreamReady = false; upstreamConnecting = false; upstream = null;
+    scheduleReconnect();
+  };
+  const onError = (err: any) => {
+    logger.error({ err }, 'yahoo_ws_error');
+  };
+  const onMessage = (data: WebSocket.RawData) => {
+    // Yahoo frames are deflate (raw) compressed JSON lines
+    let txt: string | null = null;
+    if (Buffer.isBuffer(data)) {
+      try { txt = zlib.inflateRawSync(data).toString('utf8'); } catch { /* ignore */ }
+    } else if (typeof data === 'string') {
+      txt = data;
+    }
+    if (!txt) return;
+    const lines = txt.split('\n').filter(l => l.trim().length);
+    for (const line of lines) {
+      try {
+        const obj = JSON.parse(line);
+        // Typical shape: { id:"AAPL", price: 190.12, time: 1726372812, ... }
+        if (obj && obj.id && (obj.price != null)) {
+          const sym = String(obj.id).toUpperCase();
+            const priceNum = Number(obj.price);
+          if (!Number.isFinite(priceNum)) continue;
+          const iso = obj.time ? new Date(Number(obj.time) * 1000).toISOString() : new Date().toISOString();
+          const payload = JSON.stringify({ type: 'quote', symbol: sym, price: priceNum, time: iso, source: 'yahoo' });
+          const clients = symbolClients.get(sym);
+          if (clients) {
+            for (const c of clients) safeSend(c.ws, payload);
+          }
+        }
+      } catch {/* ignore parse errors */}
+    }
+  };
+  upstream.on('open', onOpen);
+  upstream.on('close', onClose);
+  upstream.on('error', onError);
+  upstream.on('message', onMessage);
+}
+
+function scheduleReconnect() {
+  if (upstreamReady) return;
+  upstreamReconnectAttempts += 1;
+  const delay = Math.min(30_000, 1000 * Math.pow(2, upstreamReconnectAttempts));
+  logger.info({ delay }, 'yahoo_ws_reconnect_scheduled');
+  setTimeout(() => connectUpstream(), delay);
+}
+
+function sendUpstreamSubscribe(symbols: string[]) {
+  if (!upstream || !upstreamReady) return;
+  const unique = Array.from(new Set(symbols.filter(Boolean)));
+  if (!unique.length) return;
+  try { upstream.send(JSON.stringify({ subscribe: unique })); } catch (err) { logger.warn({ err }, 'yahoo_ws_subscribe_failed'); }
+}
+
+function safeSend(ws: WebSocket, msg: string) {
+  if (ws.readyState === WebSocket.OPEN) {
+    try { ws.send(msg); } catch {}
+  }
+}
 
 export function attachLive(server: HttpServer) {
+  const ENABLE = String(process.env.LIVE_WS ?? 'true').toLowerCase() !== 'false';
+  if (!ENABLE) {
+    logger.warn('live_ws_disabled_env');
+    return;
+  }
   const wss = new WebSocketServer({ server, path: '/ws' });
-  const clients = new Set<Client>();
-  const subscriptions = new Map<string, number>(); // symbol -> refcount
+  logger.info('live_ws_server_initialized');
 
-  // Tunables for polling + backoff
-  const LIVE_BASE_MS = Number(process.env.LIVE_POLL_BASE_MS || 10_000);
-  const LIVE_BACKOFF_MULT = Number(process.env.LIVE_BACKOFF_MULT || 2);
-  const LIVE_BACKOFF_MAX_MS = Number(process.env.LIVE_BACKOFF_MAX_MS || 60_000);
-  const LIVE_BACKOFF_DECAY_MS = Number(process.env.LIVE_BACKOFF_DECAY_MS || 500);
-  const LIVE_QUOTE_BATCH_SIZE = Number(process.env.LIVE_QUOTE_BATCH_SIZE || 25);
-  const LIVE_INTER_CHUNK_MS = Number(process.env.LIVE_INTER_CHUNK_MS || 200);
-  const LIVE_USE_CHART_FALLBACK = String(process.env.LIVE_USE_CHART_FALLBACK || 'true') === 'true';
-
-  function subscribe(sym: string) {
-    const s = sym.toUpperCase();
-    subscriptions.set(s, (subscriptions.get(s) || 0) + 1);
-  }
-  function unsubscribe(sym: string) {
-    const s = sym.toUpperCase();
-    const n = (subscriptions.get(s) || 0) - 1;
-    if (n <= 0) subscriptions.delete(s); else subscriptions.set(s, n);
-  }
+  ensureSyntheticLoop();
 
   wss.on('connection', (ws) => {
     const client: Client = { ws, subs: new Set<string>() };
-    clients.add(client);
     logger.info('ws_client_connected');
-    ws.on('message', (data) => {
-      try {
-        const msg = JSON.parse(String(data));
-        if (msg.type === 'subscribe' && msg.symbol) {
-          const sym = resolveTicker(String(msg.symbol), 'yahoo').toUpperCase();
-          client.subs.add(sym);
-          subscribe(sym);
-          ws.send(JSON.stringify({ type:'subscribed', symbol: sym }));
-          // Try to send latest cached price immediately (if any)
-          try {
-            const last = latestPrice(sym);
-            if (last) {
-              const time = new Date(last.date + 'T15:30:00Z').toISOString();
-              ws.send(JSON.stringify({ type:'quote', symbol: sym, price: last.close, time }));
-            }
-          } catch {}
-        }
-        if (msg.type === 'unsubscribe' && msg.symbol) {
-          const sym = resolveTicker(String(msg.symbol), 'yahoo').toUpperCase();
-          client.subs.delete(sym);
-          unsubscribe(sym);
-          ws.send(JSON.stringify({ type:'unsubscribed', symbol: sym }));
-        }
-      } catch {}
-    });
-    ws.on('close', () => {
-      for (const s of client.subs) unsubscribe(s);
-      clients.delete(client);
-      logger.info('ws_client_disconnected');
-    });
-  });
+    safeSend(ws, JSON.stringify({ type: 'info', message: 'Connected', upstream: upstreamReady ? 'yahoo' : 'synthetic' }));
 
-  // Poller to fetch quotes and store (with batching + backoff)
-  let currentDelay = LIVE_BASE_MS;
-  const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
-  const poll = async () => {
-    try {
-      const syms = Array.from(subscriptions.keys());
-      if (syms.length) {
-        for (let i = 0; i < syms.length; i += LIVE_QUOTE_BATCH_SIZE) {
-          const chunk = syms.slice(i, i + LIVE_QUOTE_BATCH_SIZE);
-          try {
-            const quotes = await fetchYahooQuotesBatch(chunk);
-            for (const q of quotes) {
-              const date = new Date(q.time).toISOString().slice(0,10);
-              const row = { symbol: q.symbol, date, open: q.price, high: q.price, low: q.price, close: q.price, volume: 0 };
-              insertPriceRow(row);
-              upsertStock(q.symbol, q.symbol);
-              const payload = JSON.stringify({ type: 'quote', symbol: q.symbol, price: q.price, time: q.time });
-              for (const c of clients) { if (c.subs.has(q.symbol) && c.ws.readyState === 1) c.ws.send(payload); }
-            }
-            // success: decay delay
-            if (currentDelay > LIVE_BASE_MS) {
-              currentDelay = Math.max(LIVE_BASE_MS, currentDelay - LIVE_BACKOFF_DECAY_MS);
-            }
-          } catch (err) {
-            logger.error({ err, symbols: chunk.join(',') }, 'yahoo_quote_failed');
-            // Optional chart-based fallback per symbol
-            if (LIVE_USE_CHART_FALLBACK) {
-              for (const s of chunk) {
-                try {
-                  const chart = await fetchYahooDaily(s, '1d', '1m');
-                  const rows = parseYahooDaily(s, chart);
-                  const last = rows[rows.length - 1];
-                  if (last) {
-                    insertPriceRow(last);
-                    upsertStock(s, s);
-                    const time = new Date(last.date + 'T15:30:00Z').toISOString();
-                    const payload = JSON.stringify({ type: 'quote', symbol: s, price: last.close, time });
-                    for (const c of clients) { if (c.subs.has(s) && c.ws.readyState === 1) c.ws.send(payload); }
-                  }
-                  await sleep(Math.max(200, LIVE_INTER_CHUNK_MS));
-                } catch (e) {
-                  logger.error({ err: e, symbol: s }, 'yahoo_chart_fallback_failed');
-                }
-              }
-            }
-            // failure: backoff
-            currentDelay = Math.min(LIVE_BACKOFF_MAX_MS, Math.max(LIVE_BASE_MS, currentDelay * LIVE_BACKOFF_MULT));
+    ws.on('message', (raw) => {
+      let msg: any;
+      try { msg = JSON.parse(String(raw)); } catch { return; }
+      if (msg?.type === 'subscribe' && msg.symbol) {
+        const sym = String(msg.symbol).toUpperCase().replace(/[^A-Z0-9_.-]/g,'');
+        if (!sym) return;
+        if (!client.subs.has(sym)) {
+          client.subs.add(sym);
+          if (!symbolClients.has(sym)) symbolClients.set(sym, new Set());
+          symbolClients.get(sym)!.add(client);
+          safeSend(ws, JSON.stringify({ type: 'subscribed', symbol: sym }));
+          // Upstream subscribe if first time globally
+          if (!upstreamSubs.has(sym)) {
+            upstreamSubs.add(sym);
+            connectUpstream();
+            if (upstreamReady) sendUpstreamSubscribe([sym]);
           }
-          await sleep(LIVE_INTER_CHUNK_MS);
+        }
+      } else if (msg?.type === 'unsubscribe' && msg.symbol) {
+        const sym = String(msg.symbol).toUpperCase();
+        if (client.subs.delete(sym)) {
+          const set = symbolClients.get(sym);
+          set?.delete(client);
+          safeSend(ws, JSON.stringify({ type: 'unsubscribed', symbol: sym }));
+          // We keep upstream subscription (simple; avoids churn). Could implement unsubscribe.
         }
       }
-    } catch (err) {
-      logger.error({ err }, 'ws_poll_cycle_failed');
-      currentDelay = Math.min(LIVE_BACKOFF_MAX_MS, Math.max(LIVE_BASE_MS, currentDelay * LIVE_BACKOFF_MULT));
-    } finally {
-      setTimeout(poll, currentDelay);
-    }
-  };
-  // start polling loop
-  setTimeout(poll, currentDelay);
+    });
+
+    ws.on('close', () => {
+      logger.info('ws_client_disconnected');
+      // Remove client from all symbol sets
+      for (const sym of client.subs) {
+        const set = symbolClients.get(sym);
+        set?.delete(client);
+        if (set && set.size === 0) {
+          symbolClients.delete(sym);
+          // Keep upstream subscription (idempotent). Could: upstreamSubs.delete(sym)
+        }
+      }
+      client.subs.clear();
+    });
+  });
 }

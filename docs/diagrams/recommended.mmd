@@ -1,0 +1,46 @@
+﻿graph LR
+  FE[Frontend] --> GW[API Gateway / Backend]
+
+  subgraph Services
+    ING[Ingestion Service]
+    RT[Realtime Service]
+    RAG[Vector/RAG Service]
+    ANA[Analysis Service]
+  end
+
+  subgraph Infra
+    Q[(Queue: Redis/BullMQ or Kafka)]
+    C[(Cache: Redis)]
+    OLTP[(PostgreSQL)]
+    VDB[(Vector DB: Chroma / pgvector / Weaviate)]
+    OBS[Monitoring: Prometheus + Grafana + OTel]
+    SEC[Secrets: Vault / Cloud KMS]
+  end
+
+  GW -->  ING
+  GW -->  RAG
+  GW -->  ANA
+  FE -->  RT
+
+  SCH[Scheduler (BullMQ/Temporal)] --> Q
+  GW --> C
+  GW --> OLTP
+
+  ING --> Q
+  ING -- Providers --> YF[Yahoo] & STQ[Stooq] & NEWSAPI[NewsAPI] & MC[Moneycontrol] & TL[Trendlyne] & ET[ET Markets] & TT[Tickertape] & MM[MarketsMojo]
+  ING --> OLTP
+  ING --> VDB
+  ING --> C
+
+  RT --> OLTP
+  RT --> C
+
+  RAG --> VDB
+  ANA --> OLTP
+
+  subgraph Ops
+    OBS -.-> GW & ING & RT & RAG & ANA
+    SEC -.-> GW & ING & RT & RAG & ANA
+  end
+
+

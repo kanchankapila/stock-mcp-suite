@@ -5,11 +5,15 @@ import { fetchYahooQuotesBatch, fetchYahooDaily, parseYahooDaily } from './yahoo
 import { fetchStooqDaily } from './stooq.js';
 import { fetchNews, parseNews } from '../providers/news.js';
 import { fetchMcInsights, fetchMcTech } from '../providers/moneycontrol.js';
+import { fetchYahooFin } from '../providers/yahooFin.js';
 import { insertPriceRow, upsertStock, insertNewsRow, upsertMcTech } from '../db.js';
+import { indexNamespace } from '../rag/langchain.js';
 import { logger } from '../utils/logger.js';
 import { sentimentScore } from '../analytics/sentiment.js';
 import { loadStocklist } from '../utils/stocklist.js';
 import { resolveTicker } from '../utils/ticker.js';
+import * as trendlyne from '../providers/trendlyne.js';
+import * as external from '../providers/external.js';
 
 function extractSymbolsFromStocklist(filePath: string): string[] {
   try {
@@ -53,6 +57,10 @@ function resolveStocklistPath(): string | null {
 }
 
 export function startYahooPrefetchFromStocklist() {
+  if (String(process.env.PREFETCH_DISABLED || 'false') === 'true') {
+    logger.warn('prefetch_disabled_by_env_var');
+    return;
+  }
   const stocklistPath = resolveStocklistPath();
   if (!stocklistPath) {
     logger.error('stocklist_not_found');
@@ -155,6 +163,139 @@ export function startYahooPrefetchFromStocklist() {
   setInterval(runBatch, INTERVAL_MS);
 
   // Optional: Prefetch news using company names mapped from stocklist
+  // --- External provider data prefetch and DB storage ---
+  (function startExternalProviderScheduler() {
+    const ENABLE = String(process.env.PREFETCH_EXTERNAL_ENABLE || 'true').toLowerCase() === 'true';
+    if (!ENABLE) return;
+    const EXT_BATCH = Number(process.env.PREFETCH_EXTERNAL_BATCH || 25);
+    const EXT_INTERVAL_MS = Number(process.env.PREFETCH_EXTERNAL_INTERVAL_MS || 86_400_000); // 24 hours
+    let eidx = 0;
+    const runExternal = async () => {
+      try {
+        const end = Math.min(eidx + EXT_BATCH, tickers.length);
+        const slice = tickers.slice(eidx, end);
+        if (!slice.length) { eidx = 0; return; }
+        for (const ysym of slice) {
+          try {
+            // Moneycontrol price/volume
+            const mcid = mcMap.get(ysym);
+            if (mcid) {
+              const mcPvRaw = await external.mcPriceVolume(mcid).catch(()=>null);
+              const mcPv = mcPvRaw as { data?: Array<{ date?: string, open?: number, high?: number, low?: number, close?: number, volume?: number }> } | null;
+              if (mcPv && mcPv.data && Array.isArray(mcPv.data)) {
+                for (const row of mcPv.data) {
+                  if (row.date && row.close != null) {
+                    insertPriceRow({ symbol: ysym, date: row.date, open: row.open ?? row.close, high: row.high ?? row.close, low: row.low ?? row.close, close: row.close, volume: row.volume ?? 0 });
+                  }
+                }
+              }
+            }
+            // Moneycontrol stock history
+            if (mcid) {
+              const now = Math.floor(Date.now()/1000);
+              const from = now - 5*365*24*60*60; // 5 years
+              const mcHistRaw = await external.mcStockHistory(mcid, '1D', from, now).catch(()=>null);
+              const mcHist = mcHistRaw as { t?: number[], o?: number[], h?: number[], l?: number[], c?: number[], v?: number[] } | null;
+              if (mcHist && mcHist.c && Array.isArray(mcHist.c)) {
+                for (let i=0; i<mcHist.c.length; i++) {
+                  const date = mcHist.t && mcHist.t[i] ? new Date(mcHist.t[i]*1000).toISOString().slice(0,10) : null;
+                  if (date && mcHist.o && mcHist.h && mcHist.l && mcHist.c && mcHist.v &&
+                    mcHist.o[i]!=null && mcHist.h[i]!=null && mcHist.l[i]!=null && mcHist.c[i]!=null && mcHist.v[i]!=null) {
+                    insertPriceRow({ symbol: ysym, date, open: mcHist.o[i], high: mcHist.h[i], low: mcHist.l[i], close: mcHist.c[i], volume: mcHist.v[i] });
+                  }
+                }
+              }
+            }
+            // ET Markets indices (example)
+            const indices = await external.etGetAllIndices().catch(()=>null);
+            if (indices && Array.isArray(indices)) {
+              // Optionally store index data as news/docs for RAG
+              for (const idx of indices) {
+                if (idx.name && idx.last_price) {
+                  const id = `et:index:${idx.name}`;
+                  const date = new Date().toISOString();
+                  const title = `ET Index: ${idx.name}`;
+                  const summary = `Last price: ${idx.last_price}, Change: ${idx.change}, %Change: ${idx.percent_change}`;
+                  insertNewsRow({ id, symbol: ysym, date, title, summary, url: '', sentiment: 0 });
+                }
+              }
+            }
+            // Optionally index for RAG
+            try {
+              const enableRag = String(process.env.PREFETCH_RAG_INDEX_ENABLE || 'false').toLowerCase() === 'true';
+              if (enableRag) {
+                await indexNamespace(ysym, { texts: [{ text: `External data for ${ysym}`, metadata: { date: new Date().toISOString().slice(0,10), source: 'external', url: '' } }] });
+              }
+            } catch {}
+          } catch (e) {
+            logger.warn({ err: e, symbol: ysym }, 'external_prefetch_symbol_failed');
+          }
+          await sleep(Math.max(100, BASE_DELAY_MS));
+        }
+        eidx = end;
+      } catch (err) {
+        logger.warn({ err }, 'external_prefetch_failed');
+      }
+    };
+    runExternal().catch(()=>{});
+    setInterval(runExternal, EXT_INTERVAL_MS);
+  })();
+
+  // --- Trendlyne provider data prefetch and DB storage ---
+  (function startTrendlyneScheduler() {
+    const ENABLE = String(process.env.PREFETCH_TRENDLYNE_ENABLE || 'true').toLowerCase() === 'true';
+    if (!ENABLE) return;
+    const TL_BATCH = Number(process.env.PREFETCH_TRENDLYNE_BATCH || 25);
+    const TL_INTERVAL_MS = Number(process.env.PREFETCH_TRENDLYNE_INTERVAL_MS || 86_400_000); // 24 hours
+    let tidx = 0;
+    const runTrendlyne = async () => {
+      try {
+        const end = Math.min(tidx + TL_BATCH, tickers.length);
+        const slice = tickers.slice(tidx, end);
+        if (!slice.length) { tidx = 0; return; }
+        for (const ysym of slice) {
+          try {
+            // Fetch advanced technicals
+            const tlid = ysym; // Assuming ysym is usable as Trendlyne ID
+            const advTech = await trendlyne.tlAdvTechnical(tlid, 24).catch(()=>null);
+            if (advTech) {
+              const norm = trendlyne.normalizeAdvTechnical(advTech);
+              const id = `trendlyne:advtech:${ysym}`;
+              const date = new Date().toISOString();
+              const title = `Trendlyne Advanced Technicals`;
+              const summary = `Score: ${norm.score}, Signal: ${norm.signal}, Decision: ${norm.decision}`;
+              insertNewsRow({ id, symbol: ysym, date, title, summary, url: 'https://trendlyne.com/', sentiment: 0 });
+              // Optionally index for RAG
+              try {
+                const enableRag = String(process.env.PREFETCH_RAG_INDEX_ENABLE || 'false').toLowerCase() === 'true';
+                if (enableRag) {
+                  await indexNamespace(ysym, { texts: [{ text: summary, metadata: { date: date.slice(0,10), source: 'trendlyne', url: 'https://trendlyne.com/' } }] });
+                }
+              } catch {}
+            }
+            // Fetch SMA chart data
+            const smaChart = await trendlyne.tlSmaChart(tlid).catch(()=>null);
+            if (smaChart && smaChart.data && Array.isArray(smaChart.data)) {
+              for (const pt of smaChart.data) {
+                if (pt.t && pt.v) {
+                  const date = new Date(pt.t*1000).toISOString().slice(0,10);
+                  insertPriceRow({ symbol: ysym, date, open: pt.v, high: pt.v, low: pt.v, close: pt.v, volume: 0 });
+                }
+              }
+            }
+          } catch (e) {
+            logger.warn({ err: e, symbol: ysym }, 'trendlyne_prefetch_symbol_failed');
+          }
+          await sleep(Math.max(100, BASE_DELAY_MS));
+        }
+        tidx = end;
+      } catch (err) {
+        logger.warn({ err }, 'trendlyne_prefetch_failed');
+      }
+    };
+    runTrendlyne().catch(()=>{});
+    setInterval(runTrendlyne, TL_INTERVAL_MS);
+  })();
   if (String(process.env.PREFETCH_NEWS_ENABLE || 'true') === 'true') {
     const NA = process.env.NEWS_API_KEY;
     if (!NA) {
@@ -179,9 +320,12 @@ export function startYahooPrefetchFromStocklist() {
             const q = newsMap.get(ysym) || ysym;
             const json = await fetchNews(q, NA);
             const news = parseNews(ysym, json);
+            const textsForIndex: Array<{ text: string; metadata: Record<string, unknown> }> = [];
             for (const n of news) {
               const s = sentimentScore([`${n.title}. ${n.summary}`]);
               insertNewsRow({ id: n.id, symbol: ysym, date: n.date, title: n.title, summary: n.summary, url: n.url, sentiment: s });
+              const t = `${n.title?.trim() || ''}. ${n.summary?.trim() || ''}`.trim();
+              if (t) textsForIndex.push({ text: t, metadata: { date: String(n.date || '').slice(0,10), source: 'news', url: n.url || '' } });
             }
             // Moneycontrol insights per symbol
             const mcid = mcMap.get(ysym);
@@ -194,6 +338,8 @@ export function startYahooPrefetchFromStocklist() {
                 const date = new Date().toISOString();
                 const sent = sentimentScore([`${title}. ${summary}`]);
                 insertNewsRow({ id, symbol: ysym, date, title, summary, url: 'https://www.moneycontrol.com/', sentiment: sent });
+                const mt = `${title.trim()}. ${summary.trim()}`.trim();
+                if (mt) textsForIndex.push({ text: mt, metadata: { date: date.slice(0,10), source: 'mc', url: '' } });
               }
               // Moneycontrol technicals (optional prefetch)
               if (String(process.env.PREFETCH_MC_TECH_ENABLE || 'true') === 'true') {
@@ -208,6 +354,47 @@ export function startYahooPrefetchFromStocklist() {
                   logger.warn({ err: e3, symbol: ysym }, 'prefetch_mc_tech_failed');
                 }
               }
+            }
+            // Optional: push into RAG vector index per symbol
+            try {
+              const enable = String(process.env.PREFETCH_RAG_INDEX_ENABLE || 'false').toLowerCase() === 'true';
+              if (enable && textsForIndex.length) {
+                await indexNamespace(ysym, { texts: textsForIndex });
+              }
+            } catch (e) {
+              logger.warn({ err: e, symbol: ysym }, 'prefetch_rag_index_failed');
+            }
+
+            // Optional: yahoo_fin profile & KPIs -> news sentiment + RAG
+            try {
+              const doYf = String(process.env.PREFETCH_YFIN_ENABLE || 'true').toLowerCase() === 'true';
+              if (doYf) {
+                const yfin = await fetchYahooFin(ysym, '1y', '1d').catch(()=>null);
+                if (yfin && yfin.ok !== false) {
+                  const qt = (yfin as any).quote_table || {};
+                  const info = (yfin as any).info || {};
+                  const sector = info.sector || info.Sector || '';
+                  const industry = info.industry || info.Industry || '';
+                  const website = info.website || info.Website || '';
+                  const summary = info.longBusinessSummary || info.long_business_summary || '';
+                  const mcap = qt['Market Cap'] || qt['Market Cap (intraday)'] || '';
+                  const pe = qt['PE Ratio (TTM)'] || '';
+                  const eps = qt['EPS (TTM)'] || '';
+                  const kpiText = `Sector: ${sector}. Industry: ${industry}. Market Cap: ${mcap}. PE: ${pe}. EPS: ${eps}. ${summary}`.trim();
+                  if (kpiText) {
+                    const id = `yfin:profile:${ysym}`;
+                    const date = new Date().toISOString();
+                    const s = sentimentScore([kpiText]);
+                    insertNewsRow({ id, symbol: ysym, date, title: 'Yahoo Profile & KPIs', summary: kpiText.slice(0, 960), url: website || 'https://finance.yahoo.com/', sentiment: s });
+                    try {
+                      const enableRag = String(process.env.PREFETCH_RAG_INDEX_ENABLE || 'false').toLowerCase() === 'true';
+                      if (enableRag) await indexNamespace(ysym, { texts: [{ text: kpiText, metadata: { date: date.slice(0,10), source: 'yahoo_fin', url: website || '' } }] });
+                    } catch {}
+                  }
+                }
+              }
+            } catch (e) {
+              logger.warn({ err: e, symbol: ysym }, 'prefetch_yahoo_fin_failed');
             }
           } catch (err) {
             const msg = String((err as any)?.message || err);
@@ -227,4 +414,178 @@ export function startYahooPrefetchFromStocklist() {
       setInterval(runNews, NEWS_INTERVAL_MS);
     }
   }
+
+  // Separate scheduler: yahoo_fin KPIs and financials (default daily)
+  (function startYahooFinScheduler() {
+    const DISABLED_ALL = String(process.env.PREFETCH_DISABLED || 'false').toLowerCase() === 'true';
+    const ENABLE = String(process.env.PREFETCH_YFIN_ENABLE || 'true').toLowerCase() === 'true';
+    if (DISABLED_ALL || !ENABLE) return;
+    const YFIN_BATCH = Number(process.env.PREFETCH_YFIN_BATCH || 25);
+    const YFIN_INTERVAL_MS = Number(process.env.PREFETCH_YFIN_INTERVAL_MS || 86_400_000); // 24 hours
+    const YFIN_COOLDOWN_MS = Number(process.env.PREFETCH_YFIN_COOLDOWN_MS || 60_000);
+    let yidx = 0;
+
+    function makeFinancialSummary(yfin: any): string {
+      try {
+        const info = yfin?.info || {};
+        const qt = yfin?.quote_table || {};
+        const sector = info.sector || info.Sector || '';
+        const industry = info.industry || info.Industry || '';
+        const mcap = qt['Market Cap'] || qt['Market Cap (intraday)'] || '';
+        // Revenue trend
+        const isObj = yfin?.income_statement || {};
+        const revMap = isObj?.totalRevenue || isObj?.TotalRevenue || null;
+        let revSummary = '';
+        if (revMap && typeof revMap === 'object') {
+          const entries = Object.entries(revMap)
+            .filter(([k,_]) => /(\d{4}(-\d{2}-\d{2})?)/.test(String(k)))
+            .sort((a,b)=> String(a[0]) < String(b[0]) ? -1 : 1);
+          const nums = entries.map(([,v]) => Number(v)).filter(n=> Number.isFinite(n));
+          if (nums.length >= 2) {
+            const first = nums[0], last = nums[nums.length-1];
+            const pct = first !== 0 ? ((last-first)/Math.abs(first))*100 : 0;
+            revSummary = `Revenue ${pct>=0? 'increased':'decreased'} ${Math.abs(pct).toFixed(1)}% over ${entries.length} periods.`;
+          }
+        }
+        // Operating Cash Flow trend
+        const cfObj = yfin?.cash_flow || {};
+        const ocfMap = (cfObj?.totalCashFromOperatingActivities) || (cfObj?.TotalCashFromOperatingActivities) || null;
+        let ocfSummary = '';
+        if (ocfMap && typeof ocfMap === 'object') {
+          const entries = Object.entries(ocfMap)
+            .filter(([k,_]) => /(\d{4}(-\d{2}-\d{2})?)/.test(String(k)))
+            .sort((a,b)=> String(a[0]) < String(b[0]) ? -1 : 1);
+          const nums = entries.map(([,v]) => Number(v)).filter(n=> Number.isFinite(n));
+          if (nums.length >= 2) {
+            const first = nums[0], last = nums[nums.length-1];
+            const pct = first !== 0 ? ((last-first)/Math.abs(first))*100 : 0;
+            ocfSummary = `Operating cash flow ${pct>=0? 'increased':'decreased'} ${Math.abs(pct).toFixed(1)}% over ${entries.length} periods.`;
+          }
+        }
+        // Margins (profit/operating)
+        let marginsSummary = '';
+        try {
+          const statsArr: Array<any> = Array.isArray(yfin?.stats) ? yfin.stats : [];
+          const findAttr = (name: string) => {
+            const row = (statsArr || []).find((r: any) => new RegExp(name, 'i').test(String(r?.Attribute || r?.attribute || '')));
+            return row ? (row?.Value ?? row?.value ?? '') : '';
+          };
+          const pm = String(findAttr('Profit Margin'));
+          const om = String(findAttr('Operating Margin')) || String(findAttr('Operating Margin (ttm)'));
+          const pmNum = (()=>{ const m = pm.match(/-?\d+(\.\d+)?/); return m ? Number(m[0]) : NaN; })();
+          const omNum = (()=>{ const m = om.match(/-?\d+(\.\d+)?/); return m ? Number(m[0]) : NaN; })();
+          const parts = [] as string[];
+          if (Number.isFinite(pmNum)) parts.push(`Profit margin ${pmNum.toFixed(1)}%`);
+          if (Number.isFinite(omNum)) parts.push(`Operating margin ${omNum.toFixed(1)}%`);
+          if (parts.length) marginsSummary = parts.join(', ') + '.';
+        } catch {}
+        // EPS trend
+        const epsArr: Array<any> = yfin?.earnings_history || [];
+        let epsSummary = '';
+        if (Array.isArray(epsArr) && epsArr.length >= 2) {
+          const vals = epsArr.map(r => Number(r?.epsactual ?? r?.epsActual ?? r?.eps_estimate)).filter(n=>Number.isFinite(n));
+          if (vals.length >= 2) {
+            const first = vals[0], last = vals[vals.length-1];
+            const delta = last-first;
+            epsSummary = `EPS ${delta>=0? 'rose':'fell'} by ${Math.abs(delta).toFixed(2)} (${vals.length} reports).`;
+          }
+        }
+        // Options bias via open interest if available
+        let optSummary = '';
+        try {
+          const opt = yfin?.options || null;
+          const calls: Array<any> = Array.isArray(opt?.calls) ? opt.calls : [];
+          const puts: Array<any> = Array.isArray(opt?.puts) ? opt.puts : [];
+          const sum = (arr: Array<any>, key: string) => arr.reduce((a, r)=> a + (Number(r?.[key]) || 0), 0);
+          const callOi = sum(calls, 'Open Interest') || sum(calls, 'openInterest') || sum(calls, 'open_interest');
+          const putOi = sum(puts, 'Open Interest') || sum(puts, 'openInterest') || sum(puts, 'open_interest');
+          if (callOi > 0 || putOi > 0) {
+            const pcr = (callOi + putOi) > 0 ? (putOi / Math.max(1, callOi)) : 0;
+            // Simple bias from OI distribution
+            const bias = (callOi + putOi) > 0 ? ((callOi - putOi) / (callOi + putOi)) : 0; // [-1,1]
+            optSummary = `Options OI PCR=${(putOi/Math.max(1,callOi)).toFixed(2)}, bias=${bias.toFixed(2)}`;
+          }
+        } catch {}
+
+        const s = [`Sector: ${sector}`, `Industry: ${industry}`, `Mcap: ${mcap}`, revSummary, ocfSummary, marginsSummary, epsSummary, optSummary]
+          .filter(Boolean).join('. ');
+        return s;
+      } catch { return ''; }
+    }
+
+    const runYfin = async () => {
+      try {
+        const end = Math.min(yidx + YFIN_BATCH, tickers.length);
+        const slice = tickers.slice(yidx, end);
+        if (!slice.length) { yidx = 0; return; }
+        for (const ysym of slice) {
+          try {
+            const yfin = await fetchYahooFin(ysym, '1y', '1d').catch(()=>null);
+            if (!yfin || yfin.ok === false) { await sleep(YFIN_COOLDOWN_MS); continue; }
+            const profileParts = (()=>{
+              const info = yfin?.info || {}; const qt = yfin?.quote_table || {};
+              const sector = info.sector || info.Sector || '';
+              const industry = info.industry || info.Industry || '';
+              const website = info.website || info.Website || '';
+              const summary = info.longBusinessSummary || info.long_business_summary || '';
+              const mcap = qt['Market Cap'] || qt['Market Cap (intraday)'] || '';
+              const pe = qt['PE Ratio (TTM)'] || '';
+              const eps = qt['EPS (TTM)'] || '';
+              return { sector, industry, website, summary, mcap, pe, eps };
+            })();
+            const kpiText = `Sector: ${profileParts.sector}. Industry: ${profileParts.industry}. Market Cap: ${profileParts.mcap}. PE: ${profileParts.pe}. EPS: ${profileParts.eps}. ${profileParts.summary}`.trim();
+            const finText = makeFinancialSummary(yfin);
+            const date = new Date().toISOString();
+            const texts: Array<{ text: string; metadata: any }> = [];
+            if (kpiText) {
+              const sid = `yfin:profile:${ysym}`;
+              const s = sentimentScore([kpiText]);
+              insertNewsRow({ id: sid, symbol: ysym, date, title: 'Yahoo Profile & KPIs', summary: kpiText.slice(0, 960), url: profileParts.website || 'https://finance.yahoo.com/', sentiment: s });
+              texts.push({ text: kpiText, metadata: { date: date.slice(0,10), source: 'yahoo_fin', url: profileParts.website || '' } });
+            }
+            if (finText) {
+              const fid = `yfin:financials:${ysym}`;
+              const s2 = sentimentScore([finText]);
+              insertNewsRow({ id: fid, symbol: ysym, date, title: 'Yahoo Financials Summary', summary: finText.slice(0, 960), url: 'https://finance.yahoo.com/', sentiment: s2 });
+              texts.push({ text: finText, metadata: { date: date.slice(0,10), source: 'yahoo_fin_financials', url: '' } });
+            }
+            const enableRag = String(process.env.PREFETCH_RAG_INDEX_ENABLE || 'false').toLowerCase() === 'true';
+            if (enableRag && texts.length) {
+              try { await indexNamespace(ysym, { texts }); } catch {}
+            }
+
+            // Store options metrics (bias) into options_metrics
+            try {
+              const opt = (yfin as any)?.options || null;
+              const calls: Array<any> = Array.isArray(opt?.calls) ? opt.calls : [];
+              const puts: Array<any> = Array.isArray(opt?.puts) ? opt.puts : [];
+              const sum = (arr: Array<any>, key: string) => arr.reduce((a, r)=> a + (Number(r?.[key]) || 0), 0);
+              const callOi = sum(calls, 'Open Interest') || sum(calls, 'openInterest') || sum(calls, 'open_interest');
+              const putOi = sum(puts, 'Open Interest') || sum(puts, 'openInterest') || sum(puts, 'open_interest');
+              const callVol = sum(calls, 'Volume') || sum(calls, 'volume');
+              const putVol = sum(puts, 'Volume') || sum(puts, 'volume');
+              let pcr: number | null = null, pvr: number | null = null, bias: number | null = null;
+              if ((callOi + putOi) > 0) { pcr = putOi / Math.max(1, callOi); bias = (callOi - putOi) / (callOi + putOi); }
+              if ((callVol + putVol) > 0) { pvr = putVol / Math.max(1, callVol); }
+              const now = new Date().toISOString().slice(0,10);
+              // Upsert via DB helper
+              try { const { upsertOptionsMetrics } = await import('../db.js'); (upsertOptionsMetrics as any)({ symbol: ysym, date: now, pcr, pvr, bias }); } catch {}
+            } catch (e) {
+              logger.warn({ err: e, symbol: ysym }, 'yfin_options_metrics_failed');
+            }
+          } catch (e) {
+            logger.warn({ err: e, symbol: ysym }, 'yfin_prefetch_symbol_failed');
+          }
+          await sleep(Math.max(100, BASE_DELAY_MS));
+        }
+        yidx = end;
+      } catch (err) {
+        logger.warn({ err }, 'yfin_prefetch_failed');
+      }
+    };
+
+    // initial kick then schedule
+    runYfin().catch(()=>{});
+    setInterval(runYfin, YFIN_INTERVAL_MS);
+  })();
 }

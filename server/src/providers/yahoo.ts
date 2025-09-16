@@ -1,99 +1,103 @@
-import fetch from 'node-fetch';
+// Yahoo Finance provider implementation using yahoo-finance2
+// Provides: fetchYahooQuotesBatch, fetchYahooDaily, parseYahooDaily
+// These power the background prefetch (quotes + fallback chart) and rebuild scripts.
+
+import yahooFinance from 'yahoo-finance2';
 import { logger } from '../utils/logger.js';
 
-const Y_BASES = ['https://query1.finance.yahoo.com', 'https://query2.finance.yahoo.com'];
-const Y_HEADERS: Record<string, string> = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-  'Accept': 'application/json,text/plain,*/*',
-  'Accept-Language': 'en-US,en;q=0.9',
-  'Referer': 'https://finance.yahoo.com/',
-  'Origin': 'https://finance.yahoo.com'
-};
+const yf: any = yahooFinance as any; // alias to bypass TS "this" context issues
 
-async function fetchWithFallback(path: string) {
-  let lastErr: any;
-  for (const base of Y_BASES) {
-    const url = `${base}${path}`;
-    try {
-      const res = await fetch(url, { headers: Y_HEADERS });
-      if (res.ok) return res;
-      // If unauthorized/forbidden, try next base
-      if (res.status === 401 || res.status === 403) {
-        lastErr = new Error(`Yahoo error: ${res.status}`);
-        continue;
-      }
-      // other errors: throw immediately
-      throw new Error(`Yahoo error: ${res.status}`);
-    } catch (err) {
-      lastErr = err;
+type QuoteRow = { symbol: string; time: number; price: number };
+
+// Basic in-memory throttle to avoid hammering API when large batches configured
+let lastQuoteBatchAt = 0;
+const MIN_BATCH_INTERVAL_MS = 750; // soft throttle between multi-symbol quote batches
+
+export async function fetchYahooQuotesBatch(symbols: string[]): Promise<QuoteRow[]> {
+  const uniq = Array.from(new Set(symbols.filter(s => !!s)));
+  if (!uniq.length) return [];
+  const now = Date.now();
+  const wait = lastQuoteBatchAt + MIN_BATCH_INTERVAL_MS - now;
+  if (wait > 0) { await new Promise(r => setTimeout(r, wait)); }
+  lastQuoteBatchAt = Date.now();
+
+  // yahoo-finance2 supports passing array to quote
+  const out: QuoteRow[] = [];
+  try {
+    const quotes: any[] = await yf.quote(uniq as any);
+    const arr = Array.isArray(quotes) ? quotes : [quotes];
+    for (const q of arr) {
+      if (!q || !q.symbol) continue;
+      const price = [q.regularMarketPrice, q.postMarketPrice, q.preMarketPrice, q.previousClose]
+        .map((v: any) => Number(v))
+        .find(v => Number.isFinite(v));
+      if (!Number.isFinite(price)) continue;
+      const epochSec = Number(q.regularMarketTime || q.postMarketTime || q.preMarketTime || q.firstTradeDateEpochUtc || 0);
+      const timeMs = epochSec > 1_000_000_000 ? epochSec * 1000 : Date.now();
+      out.push({ symbol: String(q.symbol).toUpperCase(), time: timeMs, price });
     }
+  } catch (err: any) {
+    logger.error({ err, symbols: uniq.join(',') }, 'yahoo_quote_batch_failed');
+    throw err;
   }
-  throw lastErr || new Error('Yahoo request failed');
+  return out;
 }
 
-export async function fetchYahooDaily(symbol: string, range: string = '1y', interval: string = '1d') {
-  const path = `/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}`;
-  logger.info({ symbol, range, interval }, 'yahoo_fetch_chart');
-  const res = await fetchWithFallback(path);
-  if (!res.ok) throw new Error(`Yahoo chart error: ${res.status}`);
-  const json: any = await res.json();
-  if (!json?.chart?.result?.[0]) {
-    const err = json?.chart?.error?.description || 'No result';
-    throw new Error(`Yahoo chart error: ${err}`);
+// Fetch chart data for given symbol, range, interval.
+// range examples used in codebase: '1d','1y'. interval examples: '30m','1d'.
+export async function fetchYahooDaily(symbol: string, range: string, interval: string): Promise<any> {
+  const cleanRange = range || '1y';
+  const cleanInterval = interval || '1d';
+  try {
+    const result = await yf.chart(symbol, { range: cleanRange as any, interval: cleanInterval as any });
+    return result; // shape: { meta, timestamp[], indicators:{ quote:[{open,high,low,close,volume}] } }
+  } catch (err: any) {
+    logger.error({ err, symbol, range: cleanRange, interval: cleanInterval }, 'yahoo_chart_failed');
+    throw err;
   }
-  return json.chart.result[0];
 }
 
-export function parseYahooDaily(symbol: string, chartResult: any) {
-  const ts: number[] = chartResult.timestamp || [];
-  const ind = chartResult.indicators?.quote?.[0] || {};
-  const opens: number[] = ind.open || [];
-  const highs: number[] = ind.high || [];
-  const lows: number[] = ind.low || [];
-  const closes: number[] = ind.close || [];
-  const volumes: number[] = ind.volume || [];
-  const rows = ts.map((t, i) => {
-    const date = new Date(t * 1000).toISOString().slice(0, 10);
-    return {
-      symbol,
-      date,
-      open: Number(opens[i] ?? closes[i] ?? 0),
-      high: Number(highs[i] ?? closes[i] ?? 0),
-      low: Number(lows[i] ?? closes[i] ?? 0),
-      close: Number(closes[i] ?? 0),
-      volume: Number(volumes[i] ?? 0)
-    };
-  }).filter(r => Number.isFinite(r.close) && r.close > 0);
-  return rows;
+export function parseYahooDaily(symbol: string, chart: any): Array<{ symbol: string; date: string; open: number; high: number; low: number; close: number; volume: number }> {
+  try {
+    if (!chart) return [];
+    // yahoo-finance2 returns object; but legacy code expected chart.chart.result[0]
+    let ts: number[] = [];
+    let quote: any = null;
+    if (Array.isArray(chart?.timestamp) && chart?.indicators?.quote?.[0]) {
+      ts = chart.timestamp as number[];
+      quote = chart.indicators.quote[0];
+    } else if (Array.isArray(chart?.chart?.result)) {
+      const r0 = chart.chart.result[0];
+      ts = r0?.timestamp || [];
+      quote = r0?.indicators?.quote?.[0] || null;
+    }
+    if (!ts.length || !quote) return [];
+    const opens: any[] = quote.open || [];
+    const highs: any[] = quote.high || [];
+    const lows: any[] = quote.low || [];
+    const closes: any[] = quote.close || [];
+    const vols: any[] = quote.volume || [];
+    const rows: Array<{ symbol: string; date: string; open: number; high: number; low: number; close: number; volume: number }> = [];
+    for (let i = 0; i < ts.length; i++) {
+      const epoch = Number(ts[i]);
+      if (!Number.isFinite(epoch)) continue;
+      const date = new Date(epoch * 1000).toISOString().slice(0, 10);
+      const open = Number(opens[i]);
+      const high = Number(highs[i]);
+      const low = Number(lows[i]);
+      const close = Number(closes[i]);
+      const volume = Number(vols[i]);
+      if (![open, high, low, close].every(n => Number.isFinite(n))) continue;
+      rows.push({ symbol: symbol.toUpperCase(), date, open, high, low, close, volume: Number.isFinite(volume) ? volume : 0 });
+    }
+    // Deduplicate keeping last per date
+    const map = new Map<string, typeof rows[0]>();
+    for (const r of rows) map.set(r.date, r);
+    return Array.from(map.values()).sort((a, b) => a.date < b.date ? -1 : 1);
+  } catch (err) {
+    logger.error({ err, symbol }, 'yahoo_parse_daily_failed');
+    return [];
+  }
 }
 
-export async function fetchYahooQuote(symbol: string) {
-  const res = await fetchYahooQuotesBatch([symbol]);
-  if (!res.length) throw new Error('Yahoo quote missing result');
-  return res[0];
-}
 
-export async function fetchYahooQuotesBatch(symbols: string[]) {
-  const uniq = Array.from(new Set(symbols.map(s => s.toUpperCase()).filter(Boolean)));
-  if (!uniq.length) return [] as Array<{symbol:string, price:number, time:string}>;
-  const res = await fetchWithFallback(`/v7/finance/quote?symbols=${encodeURIComponent(uniq.join(','))}`);
-  const json: any = await res.json();
-  const arr: any[] = json?.quoteResponse?.result || [];
-  return arr.map((q: any) => ({
-    symbol: q.symbol,
-    price: Number(q.regularMarketPrice ?? q.postMarketPrice ?? q.preMarketPrice ?? 0),
-    time: new Date((q.regularMarketTime || Math.floor(Date.now()/1000)) * 1000).toISOString()
-  })).filter((x: any) => Number.isFinite(x.price) && x.price > 0);
-}
-
-// Fetch Yahoo quoteSummary modules for a symbol
-// Example modules: price,summaryDetail,assetProfile,financialData,defaultKeyStatistics
-export async function fetchYahooQuoteSummary(symbol: string, modules: string[] = ['price','summaryDetail','assetProfile','financialData','defaultKeyStatistics']) {
-  const m = encodeURIComponent(modules.join(','));
-  const path = `/v10/finance/quoteSummary/${encodeURIComponent(symbol)}?modules=${m}`;
-  logger.info({ symbol, modules }, 'yahoo_fetch_quote_summary');
-  const res = await fetchWithFallback(path);
-  if (!res.ok) throw new Error(`Yahoo quoteSummary error: ${res.status}`);
-  const json: any = await res.json();
-  return json?.quoteSummary || json;
-}
