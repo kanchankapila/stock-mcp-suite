@@ -5,6 +5,8 @@
 import yahooFinance from 'yahoo-finance2';
 import { logger } from '../utils/logger.js';
 
+const yf: any = yahooFinance as any; // alias to bypass TS "this" context issues
+
 type QuoteRow = { symbol: string; time: number; price: number };
 
 // Basic in-memory throttle to avoid hammering API when large batches configured
@@ -22,7 +24,7 @@ export async function fetchYahooQuotesBatch(symbols: string[]): Promise<QuoteRow
   // yahoo-finance2 supports passing array to quote
   const out: QuoteRow[] = [];
   try {
-    const quotes: any[] = await yahooFinance.quote(uniq as any);
+    const quotes: any[] = await yf.quote(uniq as any);
     const arr = Array.isArray(quotes) ? quotes : [quotes];
     for (const q of arr) {
       if (!q || !q.symbol) continue;
@@ -47,7 +49,7 @@ export async function fetchYahooDaily(symbol: string, range: string, interval: s
   const cleanRange = range || '1y';
   const cleanInterval = interval || '1d';
   try {
-    const result = await yahooFinance.chart(symbol, { range: cleanRange as any, interval: cleanInterval as any });
+    const result = await yf.chart(symbol, { range: cleanRange as any, interval: cleanInterval as any });
     return result; // shape: { meta, timestamp[], indicators:{ quote:[{open,high,low,close,volume}] } }
   } catch (err: any) {
     logger.error({ err, symbol, range: cleanRange, interval: cleanInterval }, 'yahoo_chart_failed');

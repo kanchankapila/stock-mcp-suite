@@ -15,6 +15,8 @@
 import yahooFinance from 'yahoo-finance2';
 import { logger } from '../utils/logger.js';
 
+const yf: any = yahooFinance as any; // alias to access dynamic methods safely
+
 interface YFinCompat {
   info: Record<string, any>;
   quote_table: Record<string, any>;
@@ -61,9 +63,9 @@ export async function fetchYahooFin(symbol: string, range: string, interval: str
       'price'
     ] as const;
     const [quoteSummary, optChain] = await Promise.all([
-      yahooFinance.quoteSummary(sym, { modules: modules as any }).catch(e => { throw e; }),
+      yf.quoteSummary(sym, { modules: modules as any }).catch(e => { throw e; }),
       // Option chain is optional; catch & continue on failure (some equities may not have options)
-      yahooFinance.options(sym, { contracts: undefined }).catch(() => null)
+      yf.options(sym, { contracts: undefined }).catch(() => null)
     ]);
 
     // Extract profile & basic fields

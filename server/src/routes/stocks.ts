@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import db, { upsertStock, insertPriceRow, insertNewsRow, listPrices, listNews, saveAnalysis, getMcTech, upsertMcTech, getLatestOptionsBias, listOptionsMetrics } from '../db.js';
+import db, { upsertStock, insertPriceRow, insertNewsRow, listPrices, listNews, saveAnalysis, getMcTech, upsertMcTech, getLatestOptionsBias, listOptionsMetrics, insertProviderData, upsertProvider } from '../db.js';
 import { fetchDailyTimeSeries, parseAlphaDaily } from '../providers/alphaVantage.js';
 import { fetchNews, parseNews } from '../providers/news.js';
 import { fetchMcInsights, fetchMcTech } from '../providers/moneycontrol.js';
@@ -280,6 +280,7 @@ router.get('/top-picks/history', asyncHandler(async (req, res) => {
 }));
 
 // Yahoo full data endpoint (reintroduced using yahoo-finance2)
+const yf: any = yahooFinance as any; // dynamic alias
 router.get('/stocks/:symbol/yahoo-full', asyncHandler(async (req, res) => {
   const symbol = String(req.params.symbol || '').toUpperCase();
   if (!symbol) return res.status(400).json(ResponseUtils.error('symbol_required'));
@@ -288,11 +289,117 @@ router.get('/stocks/:symbol/yahoo-full', asyncHandler(async (req, res) => {
   const modulesRaw = String(req.query.modules || 'price,summaryDetail,assetProfile,financialData,defaultKeyStatistics');
   const modules = modulesRaw.split(',').map(m => m.trim()).filter(Boolean) as any;
   try {
-    const [quoteData, chartRaw, summary] = await Promise.all([
-      yahooFinance.quote(symbol).catch(() => null),
-      yahooFinance.chart(symbol, { range: range as any, interval: interval as any }).catch(() => null),
-      yahooFinance.quoteSummary(symbol, { modules }).catch(() => null)
+    const [quoteData, chartRaw, summary, optionsChain, fundamentalsTs, historical, insights] = await Promise.all([
+      yf.quote(symbol).catch(() => null),
+      yf.chart(symbol, { range: range as any, interval: interval as any }).catch(() => null),
+      yf.quoteSummary(symbol, { modules }).catch(() => null),
+      yf.options(symbol, { contracts: undefined }).catch(() => null),
+      // Optional modules (guard if function not present in lib version)
+      (yf.fundamentalsTimeSeries ? yf.fundamentalsTimeSeries(symbol).catch(() => null) : Promise.resolve(null)),
+      (yf.historical ? yf.historical(symbol, { period1: '2000-01-01' }).catch(() => null) : Promise.resolve(null)),
+      (yf.insights ? yf.insights(symbol).catch(() => null) : Promise.resolve(null))
     ]);
+    // Persist snapshot
+    try {
+      upsertProvider({ id: 'yahoo_full', name: 'Yahoo Finance Full', kind: 'market_data', enabled: true });
+      insertProviderData({
+        provider_id: 'yahoo_full',
+        symbol,
+        captured_at: new Date().toISOString(),
+        payload: { symbol, range, interval, modules, quote: quoteData, chart: chartRaw, summary, options: optionsChain, fundamentalsTimeSeries: fundamentalsTs, historical, insights }
+      });
+    } catch {}
+
+    // RAG indexing (structured to aid QA). Build concise text slices.
+    try {
+      const texts: Array<{ text: string; metadata?: Record<string, unknown> }> = [];
+      const nowDate = new Date().toISOString().slice(0,10);
+      if (quoteData) {
+        const q = quoteData as any;
+        const parts: string[] = [];
+        const add = (k:string, v:any) => { if (v===0 || (v && v!==null && v!==undefined)) parts.push(`${k}: ${v}`); };
+        add('regularMarketPrice', q.regularMarketPrice); add('regularMarketChange', q.regularMarketChange); add('regularMarketChangePercent', q.regularMarketChangePercent);
+        add('marketCap', q.marketCap); add('volume', q.regularMarketVolume || q.volume); add('fiftyTwoWeekHigh', q.fiftyTwoWeekHigh); add('fiftyTwoWeekLow', q.fiftyTwoWeekLow);
+        texts.push({ text: `QUOTE SNAPSHOT ${symbol}: ${parts.join(', ')}`, metadata: { source: 'yahoo', kind: 'quote', date: nowDate } });
+      }
+      if (summary) {
+        const flat: string[] = [];
+        try {
+          const modulesObj = summary as any;
+            for (const [k,v] of Object.entries(modulesObj)) {
+              if (!v || typeof v !== 'object') continue;
+              const kv: string[] = [];
+              for (const [ik, iv] of Object.entries(v as any).slice(0,50)) { // limit
+                const raw = (iv as any)?.fmt ?? (iv as any)?.longFmt ?? (iv as any)?.raw ?? iv;
+                if (raw===null || raw===undefined || typeof raw === 'object') continue;
+                kv.push(`${ik}=${raw}`);
+              }
+              if (kv.length) flat.push(`${k}: ${kv.join('; ')}`);
+            }
+        } catch {}
+        if (flat.length) texts.push({ text: `QUOTE SUMMARY ${symbol}: ${flat.join(' | ')}`, metadata: { source: 'yahoo', kind: 'quoteSummary', date: nowDate } });
+      }
+      if (optionsChain && (optionsChain as any).options) {
+        try {
+          const chain = (optionsChain as any).options[0] || {};
+          const calls = Array.isArray(chain.calls)? chain.calls.slice(0,20):[];
+          const puts = Array.isArray(chain.puts)? chain.puts.slice(0,20):[];
+          const agg = (arr:any[]) => arr.reduce((a,c)=>{ const oi = c.openInterest?.raw ?? c.openInterest; const vol = c.volume?.raw ?? c.volume; a.oi += Number(oi)||0; a.vol += Number(vol)||0; return a; }, {oi:0, vol:0});
+          const cAgg = agg(calls), pAgg = agg(puts);
+          texts.push({ text: `OPTIONS SNAPSHOT ${symbol}: Calls OI=${cAgg.oi} Vol=${cAgg.vol}; Puts OI=${pAgg.oi} Vol=${pAgg.vol}; Sample Calls: ` + calls.slice(0,5).map(c=>`K${c.strike?.raw ?? c.strike} OI${c.openInterest?.raw ?? c.openInterest}`).join(', ') + '; Sample Puts: ' + puts.slice(0,5).map(p=>`K${p.strike?.raw ?? p.strike} OI${p.openInterest?.raw ?? p.openInterest}`).join(', '), metadata: { source: 'yahoo', kind: 'options', date: nowDate } });
+        } catch {}
+      }
+      if (chartRaw && Array.isArray((chartRaw as any).timestamp)) {
+        try {
+          const ts = (chartRaw as any).timestamp as number[];
+          const q = (chartRaw as any).indicators?.quote?.[0] || {};
+          const closes: any[] = q.close || [];
+          if (ts.length && closes.length) {
+            const lastIdx = closes.length - 1;
+            const lastClose = closes[lastIdx];
+            const firstClose = closes.find((v:any)=>Number.isFinite(v));
+            if (Number.isFinite(lastClose) && Number.isFinite(firstClose)) {
+              const perf = ((lastClose - firstClose)/firstClose)*100;
+              texts.push({ text: `CHART PERF ${symbol} Range ${range} Interval ${interval}: Start=${firstClose} End=${lastClose} ChangePct=${perf.toFixed(2)}% Points=${ts.length}`, metadata: { source: 'yahoo', kind: 'chart', date: nowDate } });
+            }
+          }
+        } catch {}
+      }
+      if (historical && Array.isArray(historical)) {
+        try {
+          const hist = (historical as any[]).slice(-30); // recent 30
+          const lines = hist.map(r=> `${r.date || r.dateStr || ''} O=${r.open} H=${r.high} L=${r.low} C=${r.close} V=${r.volume}`).join(' | ');
+          texts.push({ text: `HISTORICAL RECENT ${symbol}: ${lines}`, metadata: { source: 'yahoo', kind: 'historical', date: nowDate } });
+        } catch {}
+      }
+      if (fundamentalsTs && typeof fundamentalsTs === 'object') {
+        try {
+          // Flatten only a subset to avoid huge payload
+          const lines: string[] = [];
+          for (const [k,v] of Object.entries(fundamentalsTs as any).slice(0,10)) {
+            if (Array.isArray(v)) {
+              const recent = v.slice(-3).map((row:any)=> `${row.asOfDate || row.date}: ${(row.value?.raw ?? row.value)}`);
+              lines.push(`${k} => ${recent.join(', ')}`);
+            }
+          }
+          if (lines.length) texts.push({ text: `FUNDAMENTALS TIMESERIES ${symbol}: ${lines.join(' | ')}`, metadata: { source: 'yahoo', kind: 'fundamentalsTimeSeries', date: nowDate } });
+        } catch {}
+      }
+      if (insights && typeof insights === 'object') {
+        try {
+          const ins: any = insights;
+          const parts: string[] = [];
+          if (ins.instrumentInfo?.valuation?.description) parts.push(`Valuation: ${ins.instrumentInfo.valuation.description}`);
+          if (ins.reports?.length) parts.push(`Reports: ${ins.reports.length}`);
+          if (ins.sigDevs?.length) parts.push(`SignificantDevs: ${ins.sigDevs.length}`);
+          if (parts.length) texts.push({ text: `INSIGHTS ${symbol}: ${parts.join('; ')}`, metadata: { source: 'yahoo', kind: 'insights', date: nowDate } });
+        } catch {}
+      }
+      if (texts.length) {
+        await indexNamespace(symbol, { texts });
+      }
+    } catch (e) { logger.warn({ symbol, err: (e as any)?.message || e }, 'yahoo_full_rag_index_failed'); }
+
     const price = (() => {
       if (!quoteData) return null;
       const p = [quoteData.regularMarketPrice, quoteData.postMarketPrice, quoteData.preMarketPrice, quoteData.previousClose]
@@ -301,7 +408,7 @@ router.get('/stocks/:symbol/yahoo-full', asyncHandler(async (req, res) => {
     })();
     const timeEpoch = Number(quoteData?.regularMarketTime || quoteData?.postMarketTime || quoteData?.preMarketTime || 0);
     const time = timeEpoch > 1_000_000_000 ? new Date(timeEpoch * 1000).toISOString() : new Date().toISOString();
-    return res.json({ ok: true, data: { symbol, quote: { symbol, price, time }, chart: chartRaw, summary: { quoteSummary: summary } } });
+    return res.json({ ok: true, data: { symbol, quote: { symbol, price, time }, chart: chartRaw, summary: { quoteSummary: summary }, options: optionsChain, fundamentalsTimeSeries: fundamentalsTs, historical, insights } });
   } catch (err: any) {
     return res.status(500).json(ResponseUtils.error(String(err?.message || 'yahoo_full_failed')));
   }

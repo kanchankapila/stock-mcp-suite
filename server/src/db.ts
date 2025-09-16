@@ -782,4 +782,30 @@ export function pruneProviderRuns(days: number) {
   } catch { return { runs:0, batches:0, errors:0 }; }
 }
 
+export function pruneProviderData(provider_id: string, opts: { keepPerSymbol?: number; maxAgeDays?: number } = {}) {
+  const keep = Number.isFinite(opts.keepPerSymbol) ? Number(opts.keepPerSymbol) : 5;
+  const maxAgeDays = Number.isFinite(opts.maxAgeDays) ? Number(opts.maxAgeDays) : 0; // 0 = ignore
+  let deleted = 0;
+  try {
+    const symbols = db.prepare(`SELECT DISTINCT symbol FROM provider_data WHERE provider_id=?`).all(provider_id).map((r:any)=> String(r.symbol));
+    const cutoffIso = maxAgeDays > 0 ? new Date(Date.now() - maxAgeDays*86400000).toISOString() : '';
+    const delStmt = db.prepare(`DELETE FROM provider_data WHERE provider_id=? AND symbol=? AND captured_at<? AND rowid IN (SELECT rowid FROM provider_data WHERE provider_id=? AND symbol=? ORDER BY captured_at DESC LIMIT -1 OFFSET ? )`);
+    // Fallback simpler strategy per symbol (two passes)
+    for (const sym of symbols) {
+      const rows = db.prepare(`SELECT rowid, captured_at FROM provider_data WHERE provider_id=? AND symbol=? ORDER BY captured_at DESC`).all(provider_id, sym) as Array<{rowid:number; captured_at:string}>;
+      const excess = rows.slice(keep);
+      for (const r of excess) {
+        if (!cutoffIso || r.captured_at < cutoffIso) {
+          try { db.prepare(`DELETE FROM provider_data WHERE rowid=?`).run(r.rowid); deleted++; } catch {}
+        }
+      }
+      if (maxAgeDays > 0) {
+        const old = rows.filter(r => r.captured_at < cutoffIso && !excess.find(e=>e.rowid===r.rowid));
+        for (const r of old) { try { db.prepare(`DELETE FROM provider_data WHERE rowid=?`).run(r.rowid); deleted++; } catch {} }
+      }
+    }
+  } catch (err) { logger.warn({ err, provider_id }, 'prune_provider_data_failed'); }
+  return { deleted };
+}
+
 function safeJson(x: any) { try { return JSON.parse(String(x)); } catch { return null; } }
