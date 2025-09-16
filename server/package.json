@@ -15,7 +15,9 @@
     "db:assert": "node --loader ts-node/esm scripts/db-assert.ts",
     "db:rebuild": "node --loader ts-node/esm scripts/rebuild.ts",
     "alpha:fetch": "node --loader ts-node/esm scripts/alpha-fetch.ts AAPL",
-    "test:ingestion": "node tests/ingestion-mock.cjs"
+    "test:ingestion": "node tests/ingestion-mock.cjs",
+    "yahoo:options": "tsx scripts/yahoo-options.ts",
+    "yahoo:v3:all": "tsx scripts/yahoo-v3-all.ts"
   },
   "dependencies": {
     "@huggingface/inference": "^4.7.1",
@@ -37,7 +39,8 @@
     "sentiment": "^5.0.2",
     "ws": "^8.18.0",
     "zod": "^3.23.8",
-    "yahoo-finance2": "^2.13.7"
+    "yahoo-finance2": "^2.13.7",
+    "@gadicc/yahoo-finance2": "3.10.0"
   },
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^10.9.1",
