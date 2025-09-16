@@ -64,15 +64,15 @@ CREATE TABLE IF NOT EXISTS prices( symbol TEXT, date TEXT, open REAL, high REAL,
 CREATE TABLE IF NOT EXISTS news( id TEXT PRIMARY KEY, symbol TEXT, date TEXT, title TEXT, summary TEXT, url TEXT, sentiment REAL );
 CREATE INDEX IF NOT EXISTS news_symbol_date ON news(symbol, date);
 CREATE INDEX IF NOT EXISTS prices_date_idx ON prices(date);
-CREATE INDEX IF NOT EXISTS docs_symbol_idx ON docs(symbol);
-CREATE INDEX IF NOT EXISTS analyses_symbol_idx ON analyses(symbol);
-CREATE INDEX IF NOT EXISTS options_metrics_symbol_idx ON options_metrics(symbol);
 CREATE TABLE IF NOT EXISTS mc_tech( symbol TEXT, freq TEXT, data TEXT, updated_at TEXT, PRIMARY KEY(symbol, freq) );
 CREATE TABLE IF NOT EXISTS docs( id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT, chunk TEXT, terms TEXT );
+CREATE INDEX IF NOT EXISTS docs_symbol_idx ON docs(symbol);
 CREATE TABLE IF NOT EXISTS rag_embeddings( ns TEXT, id TEXT, text TEXT, metadata TEXT, vector TEXT, PRIMARY KEY(ns, id) );
 CREATE TABLE IF NOT EXISTS rag_url_status( ns TEXT, url TEXT, last_indexed TEXT, status TEXT, note TEXT, PRIMARY KEY(ns, url) );
 CREATE TABLE IF NOT EXISTS analyses( id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT, created_at TEXT, sentiment_score REAL, predicted_close REAL, strategy JSON, score REAL, recommendation TEXT );
+CREATE INDEX IF NOT EXISTS analyses_symbol_idx ON analyses(symbol);
 CREATE TABLE IF NOT EXISTS options_metrics( symbol TEXT, date TEXT, pcr REAL, pvr REAL, bias REAL, PRIMARY KEY(symbol, date) );
+CREATE INDEX IF NOT EXISTS options_metrics_symbol_idx ON options_metrics(symbol);
 CREATE TABLE IF NOT EXISTS top_picks_history( snapshot_date TEXT, symbol TEXT, score REAL, momentum REAL, sentiment REAL, mc_score REAL, recommendation TEXT, created_at TEXT, PRIMARY KEY(snapshot_date, symbol) );
 CREATE INDEX IF NOT EXISTS tph_date_idx ON top_picks_history(snapshot_date);
 CREATE INDEX IF NOT EXISTS tph_symbol_idx ON top_picks_history(symbol);

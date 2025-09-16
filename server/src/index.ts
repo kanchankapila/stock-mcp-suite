@@ -25,6 +25,7 @@ import { router as portfolioRoutes } from './routes/portfolio.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 import { ResponseUtils } from './shared/utils/response.utils.js';
 import { router as agentRoutes } from './routes/agent.js';
+import { startYahooPrefetchFromStocklist } from './providers/prefetch.js';
 
 const app = express();
 app.use(cors());
@@ -108,6 +109,16 @@ function listenOnce(port: number) {
         startRagAutoTasks();
       } catch (err:any) {
         logger.warn({ err }, 'rag_health_check_failed');
+      }
+      try {
+        if (String(process.env.PREFETCH_DISABLED || 'false').toLowerCase() !== 'true') {
+          startYahooPrefetchFromStocklist();
+          logger.info('prefetch_started');
+        } else {
+          logger.warn('prefetch_disabled_env');
+        }
+      } catch (err:any) {
+        logger.warn({ err }, 'prefetch_start_failed');
       }
       resolve(srv);
     });

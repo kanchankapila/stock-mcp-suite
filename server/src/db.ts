@@ -80,9 +80,6 @@ CREATE TABLE IF NOT EXISTS news(
 -- Helpful indices for query patterns
 CREATE INDEX IF NOT EXISTS news_symbol_date ON news(symbol, date);
 CREATE INDEX IF NOT EXISTS prices_date_idx ON prices(date);
-CREATE INDEX IF NOT EXISTS docs_symbol_idx ON docs(symbol);
-CREATE INDEX IF NOT EXISTS analyses_symbol_idx ON analyses(symbol);
-CREATE INDEX IF NOT EXISTS options_metrics_symbol_idx ON options_metrics(symbol);
 
 -- Moneycontrol Technicals cache
 CREATE TABLE IF NOT EXISTS mc_tech(
@@ -99,6 +96,7 @@ CREATE TABLE IF NOT EXISTS docs(
   chunk TEXT,
   terms TEXT     -- JSON array of {term, tf} for simple TF-IDF
 );
+CREATE INDEX IF NOT EXISTS docs_symbol_idx ON docs(symbol);
 
 -- Optional: Persistent RAG embeddings store (per-namespace)
 CREATE TABLE IF NOT EXISTS rag_embeddings(
@@ -130,6 +128,7 @@ CREATE TABLE IF NOT EXISTS analyses(
   score REAL,
   recommendation TEXT
 );
+CREATE INDEX IF NOT EXISTS analyses_symbol_idx ON analyses(symbol);
 
 -- Options metrics cache (daily)
 CREATE TABLE IF NOT EXISTS options_metrics(
@@ -140,6 +139,7 @@ CREATE TABLE IF NOT EXISTS options_metrics(
   bias REAL,  -- [-1,1] bullish(+)/bearish(-) derived from OI distribution
   PRIMARY KEY(symbol, date)
 );
+CREATE INDEX IF NOT EXISTS options_metrics_symbol_idx ON options_metrics(symbol);
 
 -- Fundamentals and Yahoo cache removed
 

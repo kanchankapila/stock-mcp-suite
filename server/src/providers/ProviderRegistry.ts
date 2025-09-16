@@ -3,6 +3,9 @@ import path from 'path';
 import { AlphaVantageProvider } from './AlphaVantageProvider.js';
 import { NewsApiProvider } from './NewsProvider.js';
 import { BaseProvider } from './BaseProvider.js';
+import { StooqProvider } from './StooqProvider.js';
+import { MoneycontrolProvider } from './MoneycontrolProvider.js';
+import { TrendlyneProvider } from './TrendlyneProvider.js';
 import { logger } from '../utils/logger.js';
 import { upsertProvider } from '../db.js';
 import { z } from 'zod';
@@ -95,6 +98,9 @@ class RegistryImpl {
           impl = new NewsApiProvider(qm);
           break;
         }
+        case 'stooq': impl = new StooqProvider(); break;
+        case 'moneycontrol': impl = new MoneycontrolProvider(); break;
+        case 'trendlyne': impl = new TrendlyneProvider(); break;
         default:
           logger.warn({ id: entry.id }, 'provider_unknown_skipped');
       }

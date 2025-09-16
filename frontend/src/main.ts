@@ -648,6 +648,35 @@ const _ph = document.querySelector('#stockSelect option[disabled]') as HTMLOptio
   });
 })();
 
+// Populate stock dropdown and datalist from backend
+(function initStockSelect(){
+  const sel = document.getElementById('stockSelect') as HTMLSelectElement | null;
+  const dl = document.getElementById('stocksList') as HTMLDataListElement | null;
+  if (!sel) return;
+  try { sel.innerHTML = '<option value="" disabled selected>Loading…</option>'; } catch {}
+  (async () => {
+    try {
+      const res = await new Api().listStocks();
+      const rows: Array<{ symbol:string; name?:string }> = Array.isArray(res?.data) ? res.data : [];
+      const opts = ['<option value="" disabled selected>Select a stock</option>'].concat(
+        rows.map(r => `<option value="${r.symbol}">${r.symbol} — ${r.name || r.symbol}</option>`)
+      ).join('');
+      sel.innerHTML = opts;
+      if (dl) {
+        dl.innerHTML = rows.map(r => `<option value="${r.symbol}">${r.name || r.symbol}</option>`).join('');
+      }
+    } catch (e) {
+      try { sel.innerHTML = '<option value="" disabled selected>No stocks available</option>'; } catch {}
+    }
+  })();
+  sel.addEventListener('change', () => {
+    const val = sel.value;
+    const sym = document.getElementById('symbol') as HTMLInputElement | null;
+    if (sym) sym.value = val;
+    try { emitSymbolChange(val); } catch {}
+  });
+})();
+
 // Simple page tabs: Market Overview vs Stock Insight (hide/show sections)
 (function initPageTabs(){
   const container = document.querySelector('main.content .container');
