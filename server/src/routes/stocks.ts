@@ -20,6 +20,7 @@ import { resolveTicker, findStockEntry, listTickerProvidersFromEnv, getProviderR
 import { spawn } from 'child_process';
 import { ResponseUtils } from '../shared/utils/response.utils.js';
 import { computeTopPicks, parseWeights } from '../services/topPicks.js';
+import yahooFinance from 'yahoo-finance2';
 
 export const router = Router();
 
@@ -277,4 +278,31 @@ router.get('/top-picks/history', asyncHandler(async (req, res) => {
     : db.prepare(`SELECT snapshot_date, symbol, score, momentum, sentiment, mc_score, recommendation FROM top_picks_history WHERE snapshot_date>=? ORDER BY snapshot_date DESC`).all(cutoff);
   res.json(ResponseUtils.success(rows));
 }));
-// Yahoo-specific endpoints removed
+
+// Yahoo full data endpoint (reintroduced using yahoo-finance2)
+router.get('/stocks/:symbol/yahoo-full', asyncHandler(async (req, res) => {
+  const symbol = String(req.params.symbol || '').toUpperCase();
+  if (!symbol) return res.status(400).json(ResponseUtils.error('symbol_required'));
+  const range = String(req.query.range || '1y');
+  const interval = String(req.query.interval || '1d');
+  const modulesRaw = String(req.query.modules || 'price,summaryDetail,assetProfile,financialData,defaultKeyStatistics');
+  const modules = modulesRaw.split(',').map(m => m.trim()).filter(Boolean) as any;
+  try {
+    const [quoteData, chartRaw, summary] = await Promise.all([
+      yahooFinance.quote(symbol).catch(() => null),
+      yahooFinance.chart(symbol, { range: range as any, interval: interval as any }).catch(() => null),
+      yahooFinance.quoteSummary(symbol, { modules }).catch(() => null)
+    ]);
+    const price = (() => {
+      if (!quoteData) return null;
+      const p = [quoteData.regularMarketPrice, quoteData.postMarketPrice, quoteData.preMarketPrice, quoteData.previousClose]
+        .map((v: any) => Number(v)).find(v => Number.isFinite(v));
+      return Number.isFinite(p) ? p : null;
+    })();
+    const timeEpoch = Number(quoteData?.regularMarketTime || quoteData?.postMarketTime || quoteData?.preMarketTime || 0);
+    const time = timeEpoch > 1_000_000_000 ? new Date(timeEpoch * 1000).toISOString() : new Date().toISOString();
+    return res.json({ ok: true, data: { symbol, quote: { symbol, price, time }, chart: chartRaw, summary: { quoteSummary: summary } } });
+  } catch (err: any) {
+    return res.status(500).json(ResponseUtils.error(String(err?.message || 'yahoo_full_failed')));
+  }
+}));
