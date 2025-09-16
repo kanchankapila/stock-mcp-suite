@@ -180,32 +180,61 @@ Use stored features to drive custom charts without recomputing via ML:
 
 Response contains rows with `date, ret1, ret5, ret20, vol, rsi, sma20, ema50, momentum, sent_avg, pcr, pvr`.
 
+### New (Provider Ingestion Enhancements)
+- Automatic symbol fallback: If a provider run is triggered without an explicit symbol list (request or config), it now ingests the full stocklist (deduped).
+- Batching: Set `INGEST_BATCH_SIZE` (or per-provider `defaultBatchSize`) to process symbols in chunks and persist a single aggregated run; batch timing + per-symbol average times are exposed in the ingestion result (`batches`, `symbolTimings`).
+- Run caps: `MAX_SYMBOLS_PER_RUN` limits total symbols processed in one run (useful for initial sync or constrained environments).
+- Concurrency: `INGEST_CONCURRENCY` limits simultaneous provider ingest executions server‑wide (default 2). Bulk ingest endpoint also accepts a `concurrency` parameter for parallel provider runs.
+- Bulk ingest endpoint: `POST /api/providers/ingest/all` runs all (or a subset) of enabled providers with optional parallelism.
+- Run history & batches: New endpoints return historical runs and batch breakdown. Batch metadata is also written to a new `provider_run_batches` table.
 
-- `GET /api/resolve/:input`
-  - Resolves `:input` for all providers and returns both a map and backwards-compatible top-level fields.
-  - Example: `GET /api/resolve/DABUR`
-    ```json
-    {
-      "ok": true,
-      "data": {
-        "input": "DABUR",
-        "entry": { "name":"Dabur India","symbol":"DABUR","mcsymbol":"DI","isin":"INE016A01026","tlid":"303" },
-        "providers": ["alpha","mc","news","trendlyne","yahoo"],
-        "resolved": {
-          "alpha": "DABUR",
-          "mc": "DI",
-          "news": "DABUR INDIA",
-          "trendlyne": "303",
-          "yahoo": "DABUR.NS"
-        },
-        "yahoo": "DABUR.NS",
-        "news": "DABUR INDIA",
-        "alpha": "DABUR",
-        "mc": "DI",
-        "trendlyne": "303"
-      }
-    }
-    ```
+#### Added Environment Variables
+| Var | Purpose | Default |
+|-----|---------|---------|
+| INGEST_BATCH_SIZE | Force batch size for symbol ingestion (overrides provider defaultBatchSize) | (unset) |
+| MAX_SYMBOLS_PER_RUN | Hard cap on symbols per run (after fallback / selection) | (unset / 0 = no cap) |
+| INGEST_CONCURRENCY | Max simultaneous provider ingests (semaphore) | 2 |
+
+#### New Endpoints
+| Method | Path | Body / Params | Description |
+|--------|------|---------------|-------------|
+| POST | /api/providers/ingest/all | `{ providers?: string[]; concurrency?: number; rag?: boolean; dryRun?: boolean; apiKey?: string }` | Bulk ingest all or specified providers in parallel workers. |
+| GET | /api/providers/:id/runs?limit=&offset= | Query params | Paginated provider run history (latest first). |
+| GET | /api/providers/runs/:runId/batches | - | Batch timing + symbol slices for a specific (batched) run. |
+
+Example bulk request:
+```bash
+curl -X POST http://localhost:4010/api/providers/ingest/all \
+  -H 'Content-Type: application/json' \
+  -d '{"concurrency":2,"rag":true,"dryRun":false}'
+```
+Response shape excerpt:
+```json
+{
+  "ok": true,
+  "durationMs": 18345,
+  "totalProviders": 2,
+  "results": [
+    { "providerId": "newsapi", "ok": true, "meta": { "prices":0, "news":120, "batches":3 } },
+    { "providerId": "alphavantage", "ok": true, "meta": { "prices":450, "news":0, "batches":5 } }
+  ],
+  "errors": []
+}
+```
+
+Run history example:
+```bash
+curl http://localhost:4010/api/providers/newsapi/runs?limit=5
+```
+Batch detail example:
+```bash
+curl http://localhost:4010/api/providers/runs/123/batches
+```
+
+#### Persistence Changes
+- New table: `provider_run_batches(run_id, batch_index, batch_size, duration_ms, symbols_json, created_at)`.
+- `provider_runs.meta_json` now may include `{"batches": [...]}` for quick access; authoritative batch rows live in `provider_run_batches`.
+- `applyIngestionResult` now stores run first, captures its ID, then writes batch rows & per-symbol errors referencing that ID.
 
 ### RAG (LangChain)
 

@@ -1,4 +1,5 @@
-﻿// Lightweight bootstrapping for the demo UI using vanilla TS + Vite.
+﻿// @ts-nocheck
+// Lightweight bootstrapping for the demo UI using vanilla TS + Vite.
 // If you want a full Angular project, generate one with Angular CLI and port the components/services.
 
 import { Api } from './app/services/api.service';
@@ -6,6 +7,8 @@ import { Chart, registerables } from 'chart.js';
 Chart.register(...registerables);
 import { emitSymbolChange } from './lib/events';
 import * as CardRegistry from './cards/registry';
+import { escapeHtml } from './lib/format';
+import { emit as emitEvent } from './lib/events';
 
 // Lightweight value labels + last-value annotation plugin for Chart.js
 const ValueLabelsPlugin = {
@@ -160,21 +163,7 @@ const THEME = {
 
 // Patch: helper local history cache used by watchlist sparklines
 async function getHistoryCached(symbol: string, days=60): Promise<Array<{ t: string; c: number }>> {
-  const key = `hist:${symbol}:${days}`; const ttl = 5*60*1000; // 5 min
-  try {
-    const raw = localStorage.getItem(key);
-    if (raw) {
-      const obj = JSON.parse(raw);
-      if (obj && obj.t > Date.now() - ttl && Array.isArray(obj.d)) return obj.d;
-    }
-  } catch {}
-  try {
-    const res = await new Api().history(symbol);
-    const rows: Array<any> = Array.isArray(res?.data) ? res.data : [];
-    const out = rows.slice(-days).map(r => ({ t: String(r.date||r.d||''), c: Number(r.close ?? r.c ?? NaN) })).filter(r => Number.isFinite(r.c));
-    try { localStorage.setItem(key, JSON.stringify({ t: Date.now(), d: out })); } catch {}
-    return out;
-  } catch { return []; }
+  try { return await new Api().historySeriesCached(symbol, days); } catch { return []; }
 }
 
 const root = document.getElementById('app')!;
@@ -570,7 +559,7 @@ root.innerHTML = `
             <button id="wsSub">Subscribe</button>
             <button id="wsUnsub">Unsubscribe</button>
           </div>
-          <div id="wsStatus" class="muted" style="margin-top:6px"></div>
+          <div id="wsStatus" class="muted"></div>
           <div id="wsQuotes" class="mono" style="margin-top:6px; max-height:160px; overflow:auto; white-space:pre-wrap"></div>
         </div>
         <pre class="mono" id="agentAnswer" style="white-space:pre-wrap; margin-top:8px"></pre>
@@ -905,6 +894,145 @@ function sortNums(arr: number[]) { return arr.slice().sort((a: number, b: number
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { run(); } });
 })();
 // --- End Agent Q&A ---
+
+// --- Stock Select Initialization (Added) ---
+(function initStockSelectorV2(){
+  const sel = document.getElementById('stockSelect') as HTMLSelectElement | null;
+  if (!sel) return;
+  const LS_KEY_LAST = 'stocks:last';
+  let loading = false;
+  async function fetchList(force=false){
+    if (loading) return; loading = true;
+    try {
+      const api = new Api();
+      const listRes = await api.listStocksCached(force);
+      const list: any[] = Array.isArray((listRes as any).data) ? (listRes as any).data : Array.isArray(listRes) ? listRes : [];
+      if (!sel.querySelector('option[data-loaded]')) {
+        Array.from(sel.options).forEach(o => { if (!o.disabled) sel.removeChild(o); });
+        for (const r of list.slice(0, 3000)) {
+          const opt = document.createElement('option');
+          opt.value = r.symbol;
+          opt.textContent = `${r.symbol} — ${r.name || r.symbol}`;
+          opt.setAttribute('data-loaded','1');
+          sel.appendChild(opt);
+        }
+      }
+      const last = localStorage.getItem(LS_KEY_LAST);
+      if (last && list.some(l => l.symbol === last) && sel.value !== last) {
+        sel.value = last;
+        sel.dispatchEvent(new Event('change'));
+      }
+    } catch (err){ console.warn('listStocksCached failed', err); }
+    finally { loading = false; }
+  }
+  let currentSymbolAbort: AbortController | null = null;
+  async function loadSymbolDataV2(symbol: string){
+    if (!symbol) return;
+    try { localStorage.setItem(LS_KEY_LAST, symbol); } catch {}
+    emitEvent('symbol:selected', symbol);
+    // Abort previous in-flight requests
+    if (currentSymbolAbort) { try { currentSymbolAbort.abort(); } catch {} }
+    currentSymbolAbort = new AbortController();
+    const signal = currentSymbolAbort.signal;
+    performance.mark('symbol-load-start');
+    const ov = document.getElementById('overview');
+    const hist = document.getElementById('history');
+    const newsBox = document.getElementById('news');
+    if (ov) ov.innerHTML = '<div class="muted">Overview</div><div class="mono">Loading...</div>';
+    if (hist) hist.innerHTML = '<div class="muted">Price History</div><div class="mono">Loading...</div>';
+    if (newsBox) newsBox.innerHTML = '<div class="muted">News (RAG)</div><div class="mono">Loading...</div>';
+    try {
+      const [ovr, hst, nws, ana] = await Promise.allSettled([
+        new Api().overview(symbol, { signal }),
+        new Api().history(symbol, { signal }),
+        new Api().news(symbol, { signal }),
+        new Api().analyze(symbol, { signal })
+      ]);
+      if (ov && ovr.status === 'fulfilled') {
+        const d = ovr.value?.data || ovr.value;
+        ov.innerHTML = `<div class='muted'>Overview</div><pre class='mono' style='white-space:pre-wrap'>${escapeHtml(JSON.stringify(d, null, 2))}</pre>`;
+      }
+      if (hist && hst.status === 'fulfilled') {
+        const arr = hst.value?.data || hst.value || [];
+        const last = Array.isArray(arr) && arr.length ? arr[arr.length-1] : null;
+        hist.innerHTML = `<div class='muted'>Price History</div><div class='mono'>Rows: ${Array.isArray(arr)?arr.length:0}${last?` | Last Close ${last.close} (${last.date})`:''}</div>`;
+      }
+      if (newsBox && nws.status === 'fulfilled') {
+        const arr = nws.value?.data || nws.value || [];
+        const top = Array.isArray(arr)?arr.slice(0,5):[];
+        newsBox.innerHTML = `<div class='muted'>News (RAG)</div><div class='mono' style='white-space:pre-wrap'>${top.map((n:any)=>`- ${escapeHtml(n.title||'')}`).join('\n') || 'No news'}</div>`;
+      }
+      if (ana.status === 'fulfilled') {
+        const a = ana.value?.data || ana.value;
+        const sentCard = document.getElementById('sentiment');
+        if (sentCard) sentCard.innerHTML = `<div class='muted'>Sentiment & Recommendation</div><div class='mono'>Sentiment: ${a?.sentiment?.toFixed? a.sentiment.toFixed(3):a?.sentiment} | Pred: ${a?.predictedClose} | Score: ${a?.score} | Rec: ${escapeHtml(a?.recommendation||'')}</div>`;
+      }
+    } catch (err:any) {
+      if (err?.name === 'AbortError') {
+        console.debug('symbol load aborted', symbol);
+      } else {
+        console.warn('symbol load failed', err);
+      }
+    } finally {
+      performance.mark('symbol-load-end');
+      try { const measure = performance.measure('symbol-load', 'symbol-load-start', 'symbol-load-end'); console.debug('symbol-load ms', measure.duration); } catch {}
+    }
+  }
+  sel.addEventListener('change', ()=>{
+    const symbol = sel.value;
+    if (!symbol) return;
+    loadSymbolDataV2(symbol);
+  });
+  fetchList();
+})();
+// --- End Stock Select Initialization ---
+
+// --- Cache Debug Panel (dev aid) ---
+(function initCacheDebug(){
+  const container = document.querySelector('.container');
+  if (!container) return;
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.id = 'cacheDebug';
+  card.innerHTML = `<div class="muted">Cache Debug</div>
+    <div class='flex' style='margin-top:6px'>
+      <button id='cacheRefresh' class='btn-sm'>Refresh Keys</button>
+      <button id='cacheClear' class='btn-sm'>Clear All</button>
+      <input id='cachePrefix' placeholder='Prefix (optional)' style='flex:1; min-width:140px' />
+      <button id='cacheInvalidate' class='btn-sm'>Invalidate Prefix</button>
+    </div>
+    <pre id='cacheKeysBox' class='mono' style='white-space:pre-wrap; margin-top:6px; max-height:160px; overflow:auto'></pre>`;
+  container.appendChild(card);
+  function render(){
+    try { (document.getElementById('cacheKeysBox') as HTMLElement).textContent = Api.cacheKeys().join('\n') || '(empty)'; } catch {}
+  }
+  card.querySelector('#cacheRefresh')?.addEventListener('click', render);
+  card.querySelector('#cacheClear')?.addEventListener('click', ()=>{ Api.invalidate(); render(); });
+  card.querySelector('#cacheInvalidate')?.addEventListener('click', ()=>{ const p = (document.getElementById('cachePrefix') as HTMLInputElement).value.trim(); if (p) Api.invalidate(p); render(); });
+  render();
+})();
+// --- End Cache Debug Panel ---
+
+// --- Stub helpers to satisfy references (real implementations may live elsewhere) ---
+function applyTimeframe(tf: 'D'|'M'|'Y') {
+  // Placeholder: could adjust chart windows / aggregation.
+  console.debug('[applyTimeframe]', tf);
+}
+function renderYahooData(symbol: string) {
+  console.debug('[renderYahooData] stub', symbol);
+}
+function renderMcPriceVolume(symbol: string) {
+  console.debug('[renderMcPriceVolume] stub', symbol);
+  // Optional: lazy fetch to warm cache
+  try { new Api().mcPriceVolume(symbol).catch(()=>{}); } catch {}
+}
+function renderTrendlyneAdvTech(symbol: string) {
+  console.debug('[renderTrendlyneAdvTech] stub', symbol);
+}
+function renderWatchlist() { console.debug('[renderWatchlist] stub'); }
+function initPortfolioPage() { console.debug('[initPortfolioPage] stub'); }
+function initSettingsPage() { console.debug('[initSettingsPage] stub'); }
+// --- End stubs ---
 
 
 

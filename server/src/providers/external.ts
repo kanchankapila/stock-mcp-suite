@@ -90,6 +90,35 @@ export async function mcPriceVolume(scId: string) {
   return await fetchJson(url);
 }
 
+let _mcPvCache = new Map<string, { ts: number; data: any }>();
+const MC_PV_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+export async function mcPriceVolumeCached(scId: string, opts?: { force?: boolean }) {
+  const id = scId.toUpperCase();
+  const force = !!opts?.force;
+  const now = Date.now();
+  if (!force) {
+    const cached = _mcPvCache.get(id);
+    if (cached && (now - cached.ts) < MC_PV_TTL_MS) {
+      const base = (cached.data && typeof cached.data === 'object') ? cached.data : { value: cached.data };
+      return { ...(base as any), _cached: true, _ageMs: now - cached.ts };
+    }
+  }
+  try {
+    const fresh = await mcPriceVolume(id);
+    _mcPvCache.set(id, { ts: now, data: fresh });
+    const base = (fresh && typeof fresh === 'object') ? fresh : { value: fresh };
+    return { ...(base as any), _cached: false, _ageMs: 0 };
+  } catch (err:any) {
+    const cached = _mcPvCache.get(id);
+    if (cached) {
+      const base = (cached.data && typeof cached.data === 'object') ? cached.data : { value: cached.data };
+      return { ...(base as any), _cached: true, _stale: true, _ageMs: now - cached.ts, _warn: 'stale_fallback', _err: String(err?.message||err) };
+    }
+    throw err;
+  }
+}
+
 export async function mcStockHistory(eqSymbol: string, resolution='1D', from?: number, to?: number) {
   const sym = eqSymbol.toUpperCase();
   const params = new URLSearchParams({ symbol: sym, resolution });

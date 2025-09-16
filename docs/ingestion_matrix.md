@@ -46,3 +46,13 @@
 | Background | RAG Auto Migrate | - | rag_embeddings | rag store | rag_embeddings(ns,id,text,metadata,vector) | server/src/db.ts:62 | Startup (if enabled) | server/src/rag/auto.ts:13 |
 | Background | RAG Auto Build Batch | - | DB news rows | rag store | rag_embeddings(ns,id,text,metadata,vector) | server/src/db.ts:62 | Startup (if enabled) | server/src/rag/auto.ts:25 |
 | Background | Daily Top Picks Snapshot | - | Internal compute | top_picks_history | top_picks_history(snapshot_date,symbol,score,momentum,sentiment,mc_score,recommendation,created_at) | server/src/db.ts:93 | Startup (once/day de-duped) | server/src/rag/auto.ts:83 |
+| HTTP | /api/providers/ingest/all | POST | All enabled providers (iterative) | prices, news, stocks, rag_embeddings, provider_runs, provider_run_errors | prices(...); news(...); stocks(...); rag_embeddings(...); provider_runs(id,provider_id,started_at,finished_at,meta); provider_run_errors(run_id,provider_id,error) | server/src/db.ts:20; server/src/db.ts:25; server/src/db.ts:32; server/src/db.ts:62 | On-demand (bulk) | server/src/routes/providers.ts: (bulk endpoint) |
+
+---
+
+### Notes (Updated)
+- Provider ingestion now automatically falls back to the full `stocklist` when no explicit `symbols` array is supplied via request body or provider config.
+- Batching: If `INGEST_BATCH_SIZE` (or provider `defaultBatchSize`) is set and the symbol count exceeds it, ingestion runs in batches; results are aggregated and persisted once.
+- Limiting: Set `MAX_SYMBOLS_PER_RUN` to cap how many symbols a single bulk or scheduled run will process (helps during initial syncs).
+- Concurrency: Multiple providers can be bulk‑ingested in parallel via `/api/providers/ingest/all` with the `concurrency` field (default 1). Internal per-provider symbol processing still honors batching and rate limits.
+- Per-symbol timing estimates (average per batch) and batch metadata are attached to the ingestion result (`batches`, `symbolTimings`).

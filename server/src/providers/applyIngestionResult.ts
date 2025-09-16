@@ -1,4 +1,4 @@
-import db, { insertProviderRun, insertProviderRunError, insertPriceRow, insertNewsRow, insertProviderData, upsertStock } from '../db.js';
+import db, { insertProviderRun, insertProviderRunError, insertPriceRow, insertNewsRow, insertProviderData, upsertStock, insertProviderRunBatch } from '../db.js';
 import { IngestionResult } from './BaseProvider.js';
 import { ProviderMetrics } from './ProviderMetrics.js';
 import { logger } from '../utils/logger.js';
@@ -58,17 +58,18 @@ export async function applyIngestionResult(res: IngestionResult, started: number
   }
 
   const durationMs = end - started;
-  insertProviderRun({ provider_id: providerId, started_at: startIso, finished_at: endIso, duration_ms: durationMs, success: errors.length===0, error_count: errors.length, items: { prices, news, providerData }, rag_indexed: ragDocs, meta: res.meta || null });
+  const runId = insertProviderRun({ provider_id: providerId, started_at: startIso, finished_at: endIso, duration_ms: durationMs, success: errors.length===0, error_count: errors.length, items: { prices, news, providerData }, rag_indexed: ragDocs, meta: { ...(res.meta||{}), batches: (res as any).batches || undefined, symbolTimings: (res as any).symbolTimings || undefined } });
+  // Persist batches if present
+  const batches: any[] = (res as any).batches || [];
+  if (runId && batches.length) {
+    for (const b of batches) {
+      try { insertProviderRunBatch(runId, { batch_index: b.batchIndex ?? b.batch_index ?? 0, batch_size: b.batchSize ?? b.batch_size ?? 0, duration_ms: b.durationMs ?? b.duration_ms ?? 0, symbols: b.symbols || [] }); } catch {}
+    }
+  }
   ProviderMetrics.record(providerId, errors.length===0, durationMs, { prices, news, providerData, ragDocs });
-  if (errors.length) {
-    // fetch last run id (quick lookup) - optimization: could return run id from insertProviderRun but current helper doesn't
+  if (errors.length && runId) {
     try {
-      const runRow = db.prepare('SELECT id FROM provider_runs WHERE provider_id=? ORDER BY started_at DESC LIMIT 1').get(providerId) as { id:number }|undefined;
-      if (runRow) {
-        for (const e of errors) {
-          try { insertProviderRunError(runRow.id, (e as any).symbol, String((e as any).error || 'error')); } catch {}
-        }
-      }
+      for (const e of errors) { try { insertProviderRunError(runId, (e as any).symbol, String((e as any).error || 'error')); } catch {} }
     } catch {}
   }
 
