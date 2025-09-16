@@ -287,6 +287,17 @@ CREATE TABLE IF NOT EXISTS tl_cache(
   PRIMARY KEY(tlid, kind)
 );
 CREATE INDEX IF NOT EXISTS tl_cache_updated_idx ON tl_cache(updated_at);
+
+CREATE TABLE IF NOT EXISTS provider_run_batches(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id INTEGER,
+  batch_index INTEGER,
+  batch_size INTEGER,
+  duration_ms INTEGER,
+  symbols_json TEXT,
+  created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS provider_run_batches_run_idx ON provider_run_batches(run_id);
 `);
   logger.info('db_schema_ready');
 } catch (err) {
@@ -654,11 +665,30 @@ export function latestFeature(symbol: string): { date:string; rsi:number|null } 
   } catch { return null; }
 }
 
-export function insertProviderRun(row: { provider_id:string; started_at:string; finished_at:string; duration_ms:number; success:boolean; error_count:number; items:any; rag_indexed:number; meta?:any }) {
+export function insertProviderRun(row: { provider_id:string; started_at:string; finished_at:string; duration_ms:number; success:boolean; error_count:number; items:any; rag_indexed:number; meta?:any }): number {
   try {
     const stmt = db.prepare(`INSERT INTO provider_runs(provider_id,started_at,finished_at,duration_ms,success,error_count,items_json,rag_indexed,meta_json) VALUES(?,?,?,?,?,?,?,?,?)`);
-    stmt.run(row.provider_id,row.started_at,row.finished_at,row.duration_ms,row.success?1:0,row.error_count, JSON.stringify(row.items||null), row.rag_indexed, row.meta?JSON.stringify(row.meta):null);
-  } catch (err) { logger.warn({ err, provider: row.provider_id }, 'provider_run_insert_failed'); }
+    const info = stmt.run(row.provider_id,row.started_at,row.finished_at,row.duration_ms,row.success?1:0,row.error_count, JSON.stringify(row.items||null), row.rag_indexed, row.meta?JSON.stringify(row.meta):null);
+    return Number(info.lastInsertRowid);
+  } catch (err) { logger.warn({ err, provider: row.provider_id }, 'provider_run_insert_failed'); return 0; }
+}
+
+export function insertProviderRunBatch(run_id: number, batch: { batch_index:number; batch_size:number; duration_ms:number; symbols:string[] }) {
+  try {
+    const stmt = db.prepare(`INSERT INTO provider_run_batches(run_id,batch_index,batch_size,duration_ms,symbols_json,created_at) VALUES(?,?,?,?,?,?)`);
+    stmt.run(run_id, batch.batch_index, batch.batch_size, batch.duration_ms, JSON.stringify(batch.symbols||[]), new Date().toISOString());
+  } catch (err) { logger.warn({ err, run_id, batch_index: batch.batch_index }, 'provider_run_batch_insert_failed'); }
+}
+
+export function listProviderRunsPaged(provider_id: string, limit=20, offset=0) {
+  try {
+    const rows = db.prepare(`SELECT id,provider_id,started_at,finished_at,duration_ms,success,error_count,items_json,rag_indexed,meta_json FROM provider_runs WHERE provider_id=? ORDER BY started_at DESC LIMIT ? OFFSET ?`).all(provider_id, limit, offset).map((r:any)=> ({ ...r, items: safeJson(r.items_json), meta: safeJson(r.meta_json) }));
+    return rows;
+  } catch { return []; }
+}
+
+export function listProviderRunBatches(run_id: number) {
+  try { return db.prepare(`SELECT id, batch_index, batch_size, duration_ms, symbols_json, created_at FROM provider_run_batches WHERE run_id=? ORDER BY batch_index ASC`).all(run_id).map((r:any)=> ({ ...r, symbols: safeJson(r.symbols_json)||[] })); } catch { return []; }
 }
 
 export function insertProviderRunError(run_id: number, symbol: string|undefined, error: string) {
@@ -692,6 +722,64 @@ export function getProviderConsecutiveFailures(provider_id: string, limit=50): n
     for (const r of rows) { if (r.success) break; else count++; }
     return count;
   } catch { return 0; }
+}
+
+export function aggregateProviderPerformance(provider_id: string, runLimit=50) {
+  try {
+    const runs = db.prepare(`SELECT id, success, duration_ms, meta_json FROM provider_runs WHERE provider_id=? ORDER BY started_at DESC LIMIT ?`).all(provider_id, runLimit) as Array<any>;
+    if (!runs.length) return { provider_id, runs:0, successRate:0, avgDurationMs:0, avgBatchMs:0, avgBatchSize:0, topSymbols:[] as any[] };
+    let success=0; let durSum=0; const runIds:number[]=[]; const symbolAgg: Record<string,{ ms:number; count:number }> = {}; let batchDurSum=0; let batchCount=0; let batchSizeSum=0;
+    for (const r of runs) {
+      if (r.success) success++; durSum += r.duration_ms||0; runIds.push(r.id);
+      let meta:any=null; try { meta = r.meta_json? JSON.parse(String(r.meta_json)) : null; } catch {}
+      const st = meta?.symbolTimings || {};
+      for (const [sym, ms] of Object.entries(st)) {
+        if (!symbolAgg[sym]) symbolAgg[sym] = { ms:0, count:0 }; symbolAgg[sym].ms += Number(ms)||0; symbolAgg[sym].count++;
+      }
+    }
+    if (runIds.length) {
+      const batchRows = db.prepare(`SELECT duration_ms, batch_size FROM provider_run_batches WHERE run_id IN (${runIds.map(()=>'?').join(',')})`).all(...runIds) as Array<any>;
+      for (const b of batchRows) { batchDurSum += b.duration_ms||0; batchCount++; batchSizeSum += b.batch_size||0; }
+    }
+    const topSymbols = Object.entries(symbolAgg).map(([sym,v])=> ({ symbol:sym, avgMs: v.ms / v.count })).sort((a,b)=> b.avgMs - a.avgMs).slice(0,10);
+    return {
+      provider_id,
+      runs: runs.length,
+      successRate: runs.length? success / runs.length : 0,
+      avgDurationMs: runs.length? durSum / runs.length : 0,
+      avgBatchMs: batchCount? batchDurSum / batchCount : 0,
+      avgBatchSize: batchCount? batchSizeSum / batchCount : 0,
+      topSymbols
+    };
+  } catch { return { provider_id, runs:0, successRate:0, avgDurationMs:0, avgBatchMs:0, avgBatchSize:0, topSymbols:[] as any[] }; }
+}
+
+export function aggregateAllProvidersPerformance(runLimit=50) {
+  try {
+    const ids = db.prepare(`SELECT id FROM providers`).all().map((r:any)=> String(r.id));
+    return ids.map(id => aggregateProviderPerformance(id, runLimit));
+  } catch { return []; }
+}
+
+export function pruneProviderRuns(days: number) {
+  if (!Number.isFinite(days) || days <= 0) return { runs:0, batches:0, errors:0 };
+  const cutoff = new Date(Date.now() - days * 86400000).toISOString();
+  try {
+    let runsDel=0, batchesDel=0, errorsDel=0;
+    db.transaction(()=> {
+      const oldRunIds = db.prepare(`SELECT id FROM provider_runs WHERE started_at < ?`).all(cutoff).map((r:any)=> r.id);
+      if (oldRunIds.length) {
+        const placeholders = oldRunIds.map(()=>'?').join(',');
+        const delErr = db.prepare(`DELETE FROM provider_run_errors WHERE run_id IN (${placeholders})`);
+        const delBatches = db.prepare(`DELETE FROM provider_run_batches WHERE run_id IN (${placeholders})`);
+        errorsDel = delErr.run(...oldRunIds).changes || 0;
+        batchesDel = delBatches.run(...oldRunIds).changes || 0;
+        const delRuns = db.prepare(`DELETE FROM provider_runs WHERE id IN (${placeholders})`);
+        runsDel = delRuns.run(...oldRunIds).changes || 0;
+      }
+    })();
+    return { runs: runsDel, batches: batchesDel, errors: errorsDel };
+  } catch { return { runs:0, batches:0, errors:0 }; }
 }
 
 function safeJson(x: any) { try { return JSON.parse(String(x)); } catch { return null; } }
