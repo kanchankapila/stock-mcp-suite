@@ -298,6 +298,29 @@ CREATE TABLE IF NOT EXISTS provider_run_batches(
   created_at TEXT
 );
 CREATE INDEX IF NOT EXISTS provider_run_batches_run_idx ON provider_run_batches(run_id);
+
+CREATE TABLE IF NOT EXISTS mc_futures(
+  mc_symbol TEXT,
+  expiry TEXT,
+  last_price REAL,
+  oi REAL,
+  captured_at TEXT,
+  PRIMARY KEY(mc_symbol, expiry, captured_at)
+);
+CREATE INDEX IF NOT EXISTS mc_futures_symbol_idx ON mc_futures(mc_symbol, captured_at);
+
+CREATE TABLE IF NOT EXISTS mc_options(
+  mc_symbol TEXT,
+  expiry TEXT,
+  type TEXT,
+  strike REAL,
+  last_price REAL,
+  iv REAL,
+  oi REAL,
+  captured_at TEXT,
+  PRIMARY KEY(mc_symbol, expiry, type, strike, captured_at)
+);
+CREATE INDEX IF NOT EXISTS mc_options_symbol_idx ON mc_options(mc_symbol, captured_at);
 `);
   logger.info('db_schema_ready');
 } catch (err) {
@@ -806,6 +829,22 @@ export function pruneProviderData(provider_id: string, opts: { keepPerSymbol?: n
     }
   } catch (err) { logger.warn({ err, provider_id }, 'prune_provider_data_failed'); }
   return { deleted };
+}
+
+export function insertMcFuturesSnapshot(mc_symbol: string, rows: Array<{ expiry:string; last_price:number|null; oi:number|null }>, capturedAt: string) {
+  try {
+    const stmt = db.prepare(`INSERT OR IGNORE INTO mc_futures(mc_symbol,expiry,last_price,oi,captured_at) VALUES(?,?,?,?,?)`);
+    const tx = db.transaction((items:any[])=> { for (const r of items) stmt.run(mc_symbol, r.expiry, r.last_price ?? null, r.oi ?? null, capturedAt); });
+    tx(rows);
+  } catch (err) { logger.warn({ err, mc_symbol }, 'mc_futures_snapshot_insert_failed'); }
+}
+
+export function insertMcOptionsSnapshot(mc_symbol: string, rows: Array<{ expiry:string; type:string; strike:number; last_price:number|null; iv:number|null; oi:number|null }>, capturedAt: string) {
+  try {
+    const stmt = db.prepare(`INSERT OR IGNORE INTO mc_options(mc_symbol,expiry,type,strike,last_price,iv,oi,captured_at) VALUES(?,?,?,?,?,?,?,?)`);
+    const tx = db.transaction((items:any[])=> { for (const r of items) stmt.run(mc_symbol, r.expiry, r.type, r.strike, r.last_price ?? null, r.iv ?? null, r.oi ?? null, capturedAt); });
+    tx(rows);
+  } catch (err) { logger.warn({ err, mc_symbol }, 'mc_options_snapshot_insert_failed'); }
 }
 
 function safeJson(x: any) { try { return JSON.parse(String(x)); } catch { return null; } }

@@ -61,8 +61,7 @@ function getCookieProviderUrls(): string[] {
   const list = env.split(',').map(s=>s.trim()).filter(Boolean);
   if (list.length) return list;
   return [
-    'https://vercel-ruddy-nine.vercel.app/api/trendlynecookie',
-    'https://stockinsights-vercel-amitkapila1s-projects.vercel.app/trendlynecookie'
+    'https://trendlyne.com/visitor/loginmodal/'
   ];
 }
 

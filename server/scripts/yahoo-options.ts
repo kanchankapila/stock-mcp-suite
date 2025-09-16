@@ -1,7 +1,6 @@
 #!/usr/bin/env ts-node-esm
 /**
  * Fetch and analyze options chain data (calls, puts, greeks) via yahoo-finance2.
- * Based on docs: https://jsr.io/@gadicc/yahoo-finance2/doc/modules/options
  *
  * Usage examples:
  *   npx tsx server/scripts/yahoo-options.ts AAPL
@@ -17,11 +16,7 @@
  *   --region=US         Region (default US)
  */
 import yahooFinance from 'yahoo-finance2';
-const YFAny: any = yahooFinance as any;
-// Support both v2 (function object) and v3 (class needing instantiation)
-const yf: any = (typeof YFAny === 'function' && !YFAny.quote && YFAny.prototype && YFAny.prototype.options)
-  ? new YFAny()
-  : YFAny;
+const yf: any = yahooFinance as any;
 
 interface Args { symbol: string; date?: string; limitExp: number; top: number; json: boolean; region: string; }
 function parseArgs(): Args {
@@ -46,8 +41,8 @@ function nearest<T>(arr: T[], getVal: (x:T)=>number, target: number): T | undefi
 
 async function fetchOptions(sym: string, opts: any) {
   if (typeof yf.options === 'function') return yf.options(sym, opts);
-  if (typeof yf.optionChain === 'function') return yf.optionChain(sym, opts); // older name fallback
-  throw new Error('Installed yahoo-finance2 version does not expose options()/optionChain(). Please upgrade the dependency.');
+  if (typeof yf.optionChain === 'function') return yf.optionChain(sym, opts); // fallback older API name
+  throw new Error('Installed yahoo-finance2 version does not expose options/optionChain');
 }
 
 async function main() {
