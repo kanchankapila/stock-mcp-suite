@@ -36,7 +36,8 @@
     "puppeteer": "^24.18.0",
     "sentiment": "^5.0.2",
     "ws": "^8.18.0",
-    "zod": "^3.23.8"
+    "zod": "^3.23.8",
+    "yahoo-finance2": "^2.13.7"
   },
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^10.9.1",
