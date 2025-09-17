@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock Analytics Hub - AI-Powered Investment Insights</title>
+    
+    <!-- Meta Tags for SEO -->
+    <meta name="description" content="Advanced stock analytics platform with AI-powered insights, sentiment analysis, and technical indicators for better investment decisions.">
+    <meta name="keywords" content="stock analytics, AI trading, investment insights, technical analysis, market sentiment">
+    <meta name="author" content="Stock Analytics Hub">
+    
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%233b82f6'%3e%3cpath d='M16 6l2.29 2.29-4.88 4.88-4-4L2 16.59 3.41 18l6-6 4 4 6.3-6.29L22 12V6h-6z'/%3e%3c/svg%3e">
+    
+    <!-- Preconnect for Performance -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com">
+    
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" integrity="sha512-iecdLmaskl7CVkqkXNQ/ZH/XLlvWZOJyj7Yy7tcenmpD1ypASozpmT/E0iPtmFIB46ZmdtAc9eNBvH0H/ZpiBw==" crossorigin="anonymous" referrerpolicy="no-referrer">
+    
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    
+    <!-- Modern Theme Styles -->
+    <link rel="stylesheet" href="./styles/modern-theme.css">
+    
+    <!-- Additional Styles -->
+    <style>
+        /* Loading Screen */
+        #loading-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, #0F1419 0%, #1A1D29 50%, #2C1810 100%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            transition: opacity 0.5s ease-out;
+        }
+        
+        #loading-screen.fade-out {
+            opacity: 0;
+            pointer-events: none;
+        }
+        
+        .loading-logo {
+            font-size: 4rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 2rem;
+            animation: pulse 2s infinite;
+        }
+        
+        .loading-text {
+            color: #f1f5f9;
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            text-align: center;
+        }
+        
+        .loading-subtitle {
+            color: #94a3b8;
+            font-size: 1rem;
+            margin-bottom: 3rem;
+            text-align: center;
+        }
+        
+        .loading-progress {
+            width: 300px;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 2px;
+            overflow: hidden;
+            margin-bottom: 1rem;
+        }
+        
+        .loading-progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            border-radius: 2px;
+            animation: loading-progress 3s ease-in-out infinite;
+        }
+        
+        @keyframes loading-progress {
+            0% { width: 0%; }
+            50% { width: 70%; }
+            100% { width: 100%; }
+        }
+        
+        .loading-status {
+            color: #64748b;
+            font-size: 0.875rem;
+            text-align: center;
+        }
+        
+        /* Hidden state for main app during loading */
+        #app {
+            opacity: 0;
+            transition: opacity 0.5s ease-in;
+        }
+        
+        #app.loaded {
+            opacity: 1;
+        }
+        
+        /* Enhanced scrollbar for webkit browsers */
+        * {
+            scrollbar-width: thin;
+            scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+        }
+        
+        /* Focus styles for accessibility */
+        *:focus {
+            outline: 2px solid #3b82f6;
+            outline-offset: 2px;
+        }
+        
+        button:focus,
+        input:focus,
+        select:focus {
+            outline: 2px solid #3b82f6;
+            outline-offset: 2px;
+        }
+        
+        /* Reduced motion for accessibility */
+        @media (prefers-reduced-motion: reduce) {
+            *,
+            *::before,
+            *::after {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+                scroll-behavior: auto !important;
+            }
+        }
+        
+        /* High contrast mode support */
+        @media (prefers-contrast: high) {
+            :root {
+                --border-color: #ffffff;
+                --text-muted: #cccccc;
+            }
+        }
+        
+        /* Print styles */
+        @media print {
+            .sidebar,
+            .fab,
+            .toast-container,
+            #loading-screen {
+                display: none !important;
+            }
+            
+            .main-content {
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            
+            .glass-card,
+            .card-container {
+                background: white !important;
+                border: 1px solid #ccc !important;
+                box-shadow: none !important;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Loading Screen -->
+    <div id="loading-screen" role="status" aria-live="polite">
+        <div class="loading-logo">
+            <i class="fas fa-chart-line"></i>
+        </div>
+        <h1 class="loading-text">Stock Analytics Hub</h1>
+        <p class="loading-subtitle">AI-Powered Investment Insights</p>
+        <div class="loading-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100">
+            <div class="loading-progress-fill"></div>
+        </div>
+        <div class="loading-status">Initializing analytics engine...</div>
+    </div>
+    
+    <!-- Main Application Container -->
+    <div id="app" role="main">
+        <!-- Content will be dynamically generated by main-refactored.ts -->
+    </div>
+    
+    <!-- Error Boundary -->
+    <div id="error-boundary" style="display: none;" role="alert">
+        <div style="
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(239, 68, 68, 0.1);
+            border: 2px solid #ef4444;
+            border-radius: 16px;
+            padding: 2rem;
+            text-align: center;
+            color: #ef4444;
+            backdrop-filter: blur(16px);
+            max-width: 400px;
+        ">
+            <i class="fas fa-exclamation-triangle" style="font-size: 3rem; margin-bottom: 1rem;"></i>
+            <h3>Application Error</h3>
+            <p style="margin: 1rem 0; color: #f87171;">Something went wrong. Please refresh the page to try again.</p>
+            <button onclick="location.reload()" style="
+                background: linear-gradient(135deg, #ef4444, #dc2626);
+                color: white;
+                border: none;
+                padding: 0.75rem 1.5rem;
+                border-radius: 8px;
+                cursor: pointer;
+                font-weight: 600;
+            ">Refresh Page</button>
+        </div>
+    </div>
+    
+    <!-- Service Worker Registration -->
+    <script>
+        // Simple service worker for caching (optional)
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js')
+                    .then(() => console.log('Service Worker registered'))
+                    .catch(() => console.log('Service Worker registration failed'));
+            });
+        }
+        
+        // Error handling
+        window.addEventListener('error', (event) => {
+            console.error('Global error:', event.error);
+            document.getElementById('error-boundary').style.display = 'block';
+        });
+        
+        window.addEventListener('unhandledrejection', (event) => {
+            console.error('Unhandled promise rejection:', event.reason);
+            event.preventDefault();
+        });
+        
+        // Performance monitoring
+        window.addEventListener('load', () => {
+            if (window.performance && window.performance.timing) {
+                const loadTime = window.performance.timing.loadEventEnd - window.performance.timing.navigationStart;
+                console.log(`Page load time: ${loadTime}ms`);
+            }
+        });
+        
+        // Theme detection
+        if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            document.documentElement.setAttribute('data-theme', 'dark');
+        }
+        
+        // Update loading status messages
+        const loadingMessages = [
+            'Initializing analytics engine...',
+            'Loading market data...',
+            'Connecting to AI services...',
+            'Preparing dashboard...',
+            'Almost ready...'
+        ];
+        
+        let messageIndex = 0;
+        const loadingStatus = document.querySelector('.loading-status');
+        
+        const updateLoadingMessage = () => {
+            if (loadingStatus && messageIndex < loadingMessages.length) {
+                loadingStatus.textContent = loadingMessages[messageIndex];
+                messageIndex++;
+            }
+        };
+        
+        // Update loading message every 600ms
+        const loadingInterval = setInterval(updateLoadingMessage, 600);
+        
+        // Clear interval when app loads
+        window.addEventListener('load', () => {
+            setTimeout(() => {
+                clearInterval(loadingInterval);
+                const app = document.getElementById('app');
+                if (app) app.classList.add('loaded');
+            }, 1500);
+        });
+        
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            // Ctrl/Cmd + K for search focus
+            if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+                e.preventDefault();
+                const searchInput = document.getElementById('enhanced-search');
+                if (searchInput) searchInput.focus();
+            }
+            
+            // Ctrl/Cmd + R for refresh data
+            if ((e.ctrlKey || e.metaKey) && e.key === 'r') {
+                e.preventDefault();
+                const refreshBtn = document.getElementById('refresh-data');
+                if (refreshBtn) refreshBtn.click();
+            }
+            
+            // Escape to close modals/overlays
+            if (e.key === 'Escape') {
+                const toasts = document.querySelectorAll('.toast');
+                toasts.forEach(toast => toast.remove());
+            }
+        });
+    </script>
+    
+    <!-- Main Application Script -->
+    <script type="module" src="./main-refactored.js"></script>
+    
+    <!-- Analytics (if needed) -->
+    <script>
+        // Basic analytics tracking (replace with your preferred service)
+        function trackEvent(event, category, label) {
+            if (window.gtag) {
+                window.gtag('event', event, {
+                    event_category: category,
+                    event_label: label
+                });
+            }
+            console.log(`Analytics: ${category} - ${event} - ${label}`);
+        }
+        
+        // Track app initialization
+        window.addEventListener('load', () => {
+            trackEvent('app_loaded', 'performance', 'initial_load');
+        });
+        
+        // Make trackEvent globally available
+        window.trackEvent = trackEvent;
+    </script>
+</body>
+</html>
