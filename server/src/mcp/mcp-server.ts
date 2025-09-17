@@ -5,11 +5,12 @@ import express from 'express';
 import { logger } from '../utils/logger.js';
 import { getOverview } from '../routes/stocks.js';
 import { retrieve as ragRetrieve, answer as ragAnswer } from '../rag/langchain.js';
-import { getStoredFeatures } from '../analytics/features.js';
-import { runBacktest } from '../analytics/backtest.js';
-import { analyzeSentiment } from '../analytics/sentiment.js';
-import { queryAgent } from '../agent/agent.js';
+import { backtestSMA } from '../analytics/backtest.js';
+import { sentimentScore } from '../analytics/sentiment.js';
+import { agentAnswer } from '../agent/agent.js';
 import db from '../db.js';
+import { globalPerformanceOptimizer } from '../utils/performanceOptimizer.js';
+import Sentiment from 'sentiment';
 
 // MCP Tool Definitions with enhanced capabilities
 interface MCPTool {
@@ -442,12 +443,39 @@ class MCPToolExecutor {
   }
 
   private static async analyzeSentiment(symbol: string, days: number) {
-    const result = await analyzeSentiment(symbol, days);
-    return {
-      ok: true,
-      tool: 'analyze_sentiment',
-      result
+    const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0,10);
+    const rows = db.prepare("SELECT title, summary FROM news WHERE symbol=? AND date>=? ORDER BY date DESC LIMIT 300").all(symbol, cutoff);
+    const sAnalyzer: any = new (Sentiment as any)();
+    let pos=0, neg=0, neu=0; const scores: number[] = [];
+    for (const r of rows) {
+      const txt = `${r.title}. ${r.summary}`;
+      const res = sAnalyzer.analyze(txt || '');
+      const comp = res.comparative || 0;
+      scores.push(comp);
+      if (comp > 0.05) pos++; else if (comp < -0.05) neg++; else neu++;
+    }
+    const avg = scores.length ? scores.reduce((a,b)=>a+b,0)/scores.length : 0;
+    const overall = (avg + 1) / 2; // map -1..1 -> 0..1
+    const total = rows.length;
+    // Bayesian confidence: Dirichlet(1,1,1) prior over pos/neg/neu
+    const alpha0 = 1, alphaSum = 3; // prior counts
+    const postPos = pos + alpha0, postNeg = neg + alpha0, postNeu = neu + alpha0;
+    const postTotal = postPos + postNeg + postNeu;
+    // Use (1 - normalized entropy) * sample factor
+    const pPos = postPos / postTotal, pNeg = postNeg / postTotal, pNeu = postNeu / postTotal;
+    const entropy = -[pPos,pNeg,pNeu].reduce((a,b)=> a + (b>0? b*Math.log(b):0),0)/Math.log(3);
+    const sampleFactor = total ? (total/(total+10)) : 0; // saturates towards 1
+    const confidence = Number((sampleFactor * (1 - entropy)).toFixed(4));
+    const result = {
+      symbol,
+      overall_sentiment: Number(overall.toFixed(4)),
+      positive_ratio: total? Number((pos/total).toFixed(4)) : 0,
+      negative_ratio: total? Number((neg/total).toFixed(4)) : 0,
+      neutral_ratio: total? Number((neu/total).toFixed(4)) : 0,
+      confidence,
+      sources_count: total
     };
+    return { ok: true, tool: 'analyze_sentiment', result };
   }
 
   private static async queryRAGKnowledge(symbol: string, query: string, withAnswer = true, k = 5) {
@@ -475,39 +503,74 @@ class MCPToolExecutor {
   }
 
   private static async runBacktest(params: any) {
-    const result = await runBacktest(
-      params.symbol,
-      params.strategy || 'sma_cross',
-      params.start_date,
-      params.initial_capital
-    );
-    
-    return {
-      ok: true,
-      tool: 'run_backtest',
-      result
-    };
+    const strategy = params.strategy || 'sma_cross';
+    const prices = db.prepare("SELECT date, close FROM prices WHERE symbol=? ORDER BY date ASC").all(params.symbol);
+    const pts = prices.map((p:any)=>({date:p.date, close:p.close}));
+    if (!pts.length) return { ok:false, tool:'run_backtest', error:'no_price_data' };
+
+    function simpleMomentum(data:any[]) {
+      let equity = 10000; const equityCurve=[equity]; let prevPrice = data[0].close; const trades:any[]=[]; let position=0; let entry=0;
+      for (let i=1;i<data.length;i++) {
+        const p = data[i].close; const mom = p/prevPrice -1; // 1-day momentum
+        if (position===0 && mom>0.01) { position=1; entry=p; trades.push({type:'BUY', date:data[i].date, price:p}); }
+        if (position===1 && mom<-0.005) { const ret=(p-entry)/entry; equity*= (1+ret); trades.push({type:'SELL', date:data[i].date, price:p, ret}); position=0; }
+        prevPrice = p; equityCurve.push(equity);
+      }
+      if (position===1) { const p = data[data.length-1].close; const ret=(p-entry)/entry; equity*= (1+ret); trades.push({type:'SELL', date:data[data.length-1].date, price:p, ret}); }
+      return { equity: equityCurve, trades, totalReturn: equity/10000 -1 };
+    }
+    function simpleMeanRev(data:any[]) {
+      const closes = data.map(d=>d.close); const sma20 = closes.map((_,i)=> { const s=Math.max(0,i-19); const sl=closes.slice(s,i+1); return sl.length<20? NaN: sl.reduce((a,b)=>a+b,0)/sl.length; });
+      let equity=10000; const equityCurve=[equity]; const trades:any[]=[]; let position=0; let entry=0;
+      for (let i=20;i<data.length;i++) {
+        const p = data[i].close; const s = sma20[i]; if (!Number.isFinite(s)) { equityCurve.push(equity); continue; }
+        const dev = (p - s)/s;
+        if (position===0 && dev < -0.03) { position=1; entry=p; trades.push({type:'BUY', date:data[i].date, price:p}); }
+        if (position===1 && dev > 0) { const ret=(p-entry)/entry; equity*=(1+ret); trades.push({type:'SELL', date:data[i].date, price:p, ret}); position=0; }
+        equityCurve.push(equity);
+      }
+      if (position===1) { const p = data[data.length-1].close; const ret=(p-entry)/entry; equity*=(1+ret); trades.push({type:'SELL', date:data[data.length-1].date, price:p, ret}); }
+      return { equity: equityCurve, trades, totalReturn: equity/10000 -1 };
+    }
+
+    let bt: any;
+    if (strategy === 'sma_cross') bt = backtestSMA(pts, 10, 20);
+    else if (strategy === 'momentum') bt = simpleMomentum(pts);
+    else if (strategy === 'mean_reversion') bt = simpleMeanRev(pts);
+    else return { ok:false, tool:'run_backtest', error:'unsupported_strategy' };
+
+    // Derive metrics (reuse logic from existing branch)
+    const totalReturn = bt.totalReturn;
+    const startDate = pts[0].date; const endDate = pts[pts.length-1].date;
+    const daysSpan = (new Date(endDate).getTime() - new Date(startDate).getTime())/(1000*60*60*24) || 1;
+    const annualized = Math.pow(1+totalReturn, 365/daysSpan) - 1;
+    // compute sharpe etc if not present
+    const eq = bt.equity || []; const returns:number[]=[]; for (let i=1;i<eq.length;i++){ const r=eq[i]/eq[i-1]-1; if (Number.isFinite(r)) returns.push(r);} const mean=returns.reduce((a,b)=>a+b,0)/(returns.length||1); const variance=returns.length>1? returns.reduce((a,b)=>a+(b-mean)**2,0)/(returns.length-1):0; const std=Math.sqrt(variance); const sharpe = std>0 ? (mean/std)*Math.sqrt(252): null;
+    let peak = eq[0]||10000; let maxDD=0; for (const v of eq){ if (v>peak) peak=v; const dd=v/peak -1; if (dd<maxDD) maxDD=dd; }
+    const closed = (bt.trades||[]).filter((t:any)=>t.type==='SELL'); const wins = closed.filter((t:any)=>t.ret>0).length; const winRate = closed.length? wins/closed.length : null;
+    const finalCapital = 10000 * (1+totalReturn);
+    return { ok: true, tool: 'run_backtest', result: { symbol: params.symbol, strategy, total_return: Number(totalReturn.toFixed(4)), annualized_return: Number(annualized.toFixed(4)), sharpe_ratio: sharpe!==null? Number(sharpe.toFixed(4)): null, max_drawdown: Number(maxDD.toFixed(4)), win_rate: winRate!==null? Number(winRate.toFixed(4)): null, total_trades: closed.length, final_capital: Number(finalCapital.toFixed(2)) } };
   }
 
   private static async getTechnicalFeatures(symbol: string, days: number) {
+    const cache = globalPerformanceOptimizer.cacheManager.getCache('technical_features', { ttl: 1000*60 });
+    const key = `${symbol}:${days}`;
+    const cached = cache.get(key);
+    if (cached) return { ok:true, tool:'get_technical_features', result: { symbol, features: cached, cached: true } };
+    let getStoredFeatures: any;
+    try {
+      ({ getStoredFeatures } = await import('../analytics/features.js'));
+    } catch {
+      return { ok:false, tool:'get_technical_features', error:'features_module_not_found' };
+    }
     const features = await getStoredFeatures(symbol, days);
-    return {
-      ok: true,
-      tool: 'get_technical_features',
-      result: {
-        symbol,
-        features
-      }
-    };
+    cache.set(key, features);
+    return { ok: true, tool: 'get_technical_features', result: { symbol, features, cached: false } };
   }
 
   private static async queryAgent(query: string, context?: any) {
-    const result = await queryAgent(query, context);
-    return {
-      ok: true,
-      tool: 'query_agent',
-      result
-    };
+    const result = await agentAnswer(query, context?.symbol);
+    return { ok: true, tool: 'query_agent', result };
   }
 
   private static async getMarketNews(symbol?: string, limit = 10, days = 7) {
@@ -591,6 +654,28 @@ class MCPToolExecutor {
 
 // Enhanced MCP server attachment
 export function attachMcp(app: express.Express) {
+  // Validation helper
+  function validateParams(def: MCPTool, params: any) {
+    const errs: string[] = [];
+    const schema = def.inputSchema;
+    const supplied = params || {};
+    // required
+    (schema.required || []).forEach(r=> { if (supplied[r] === undefined || supplied[r] === null || supplied[r] === '') errs.push(`Missing required field: ${r}`); });
+    // types / enums
+    for (const [k, prop] of Object.entries(schema.properties || {})) {
+      if (supplied[k] === undefined || supplied[k] === null) continue;
+      if (prop.enum && !prop.enum.includes(supplied[k])) errs.push(`Invalid value for ${k}. Expected one of ${prop.enum.join(',')}`);
+      if (prop.type && typeof supplied[k] !== prop.type) {
+        if (!(prop.type === 'number' && typeof supplied[k] === 'string' && supplied[k].trim() !== '' && !isNaN(Number(supplied[k])))) {
+          errs.push(`Field ${k} should be ${prop.type}`);
+        } else {
+          supplied[k] = Number(supplied[k]);
+        }
+      }
+    }
+    return errs;
+  }
+
   // Main MCP tool execution endpoint
   app.post('/mcp/tool', async (req, res, next) => {
     try {
@@ -612,6 +697,17 @@ export function attachMcp(app: express.Express) {
           error: `Unknown tool: ${tool}`,
           id,
           available_tools: MCP_TOOLS.map(t => t.name)
+        });
+      }
+
+      // Validate input parameters
+      const errors = validateParams(toolDef, params);
+      if (errors.length) {
+        return res.status(400).json({
+          ok: false,
+          error: 'validation_failed',
+          details: errors,
+          id
         });
       }
 
@@ -674,6 +770,11 @@ export function attachMcp(app: express.Express) {
         portfolio_management: true
       }
     });
+  });
+
+  // Performance endpoint
+  app.get('/mcp/perf', (req, res) => {
+    res.json({ ok: true, report: globalPerformanceOptimizer.getPerformanceReport() });
   });
 
   // Batch tool execution endpoint

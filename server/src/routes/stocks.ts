@@ -413,3 +413,17 @@ router.get('/stocks/:symbol/yahoo-full', asyncHandler(async (req, res) => {
     return res.status(500).json(ResponseUtils.error(String(err?.message || 'yahoo_full_failed')));
   }
 }));
+
+export function getOverview(symbol: string) {
+  try {
+    const prices = listPrices(symbol.toUpperCase(), 2000);
+    if (!prices.length) return null;
+    const last = prices[prices.length - 1];
+    const first = prices[0];
+    const change = last.close - first.close;
+    const changePct = (change / first.close) * 100;
+    return { symbol: symbol.toUpperCase(), lastClose: last.close, periodChangePct: changePct, nPrices: prices.length };
+  } catch {
+    return null;
+  }
+}
