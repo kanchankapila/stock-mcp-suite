@@ -1,188 +1,906 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Stock RAG MCP Dashboard</title>
-    <link rel="stylesheet" href="/src/styles/tokens.css" />
-    <link rel="stylesheet" href="/src/styles/layout.css" />
+    <title>🚀 Stock Intelligence Hub - AI-Powered Investment Analytics</title>
+    
+    <!-- Advanced CSS Framework & Icons -->
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- Advanced Charting & Visualization Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <script src="https://unpkg.com/apexcharts@3.45.1/dist/apexcharts.min.js"></script>
+    
+    <!-- Additional Visualization Libraries -->
+    <script src="https://unpkg.com/gridjs/dist/gridjs.umd.js"></script>
+    <link href="https://unpkg.com/gridjs/dist/theme/mermaid.min.css" rel="stylesheet" />
+    
+    <!-- Notification Library -->
+    <script src="https://cdn.jsdelivr.net/npm/notyf@3/notyf.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/notyf@3/notyf.min.css" rel="stylesheet">
+    
+    <meta name="description" content="Advanced AI-powered stock analytics platform with intelligent recommendations and visual decision-making tools" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>" />
+    
     <style>
-      * { box-sizing: border-box; }
       :root {
-        --bg: #f7f8fb;
-        --panel: #ffffff;
-        --panel-2: #fbfcff;
-        --border: #e5e7eb;
-        --border-2: #d1d5db;
-        --text: #1f2937;
-        --muted: #6b7280;
-        --brand: #3b82f6;
-        --brand-2: #8b5cf6;
-        --success: #16a34a;
-        --warn: #d97706;
-        --danger: #ef4444;
-      }
-      :root { font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif; }
-      body {
-        margin: 0;
-        color: var(--text);
-        background: radial-gradient(1200px 600px at 80% -10%, #eef2ff 0%, transparent 60%), var(--bg);
-      }
-      header {
-        padding: 16px 24px;
-        background: linear-gradient(90deg, #ffffff, #f7faff 60%);
-        border-bottom: 1px solid var(--border);
-        display: flex; align-items: center; gap: 12px;
-      }
-      .badge {
-        background: linear-gradient(135deg, var(--brand) 0%, var(--brand-2) 100%);
-        color: #ffffff;
-        font-weight: 600;
-        border-radius: 999px; padding: 6px 12px; font-size: 12px;
-        box-shadow: 0 6px 20px rgba(59,130,246,0.25);
-      }
-      .container { padding: 24px; max-width: 1400px; margin: 0 auto; }
-      .row {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
-        gap: 18px;
-        align-items: start;
-      }
-      .card {
-        background: var(--panel);
-        border: 1px solid var(--border);
-        border-radius: 16px; padding: 16px;
-        box-shadow: 0 8px 18px rgba(31,41,55,0.08);
-        transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
-      }
-      .card:hover { transform: translateY(-1px); border-color: var(--border-2); box-shadow: 0 10px 22px rgba(31,41,55,0.12); }
-      .card > .muted:first-child { text-transform: uppercase; letter-spacing: .06em; font-weight: 600; color: var(--muted); }
-      .card .muted strong { color: var(--text); }
-
-      input, select, textarea, button {
-        border-radius: 10px; border: 1px solid var(--border-2); background: var(--panel-2); color: var(--text); padding: 10px 12px;
-      }
-      select { padding: 9px 12px; }
-      textarea { resize: vertical; }
-      button { cursor: pointer; background: linear-gradient(180deg, #ffffff, #f4f6fb); border-color: var(--border-2); }
-      button:hover { border-color: var(--brand); box-shadow: 0 0 0 2px rgba(59,130,246,0.12) inset; }
-      .btn-sm { padding: 6px 10px; font-size: 12px; border-radius: 8px; }
-      .btn-sm:hover { border-color: var(--brand-2); box-shadow: 0 0 0 2px rgba(139,92,246,0.15) inset; }
-
-      .muted { color: var(--muted); font-size: 12px; }
-      .stat { font-size: 24px; font-weight: 700; color: #0f172a; }
-      .flex { display:flex; gap:10px; align-items:center; flex-wrap: wrap; }
-      .grid-3 { display:grid; grid-template-columns: repeat(3, 1fr); gap: 14px; align-items: start; }
-      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-      a { color: #1d4ed8; }
-      a:hover { color: #2563eb; }
-
-      /* Ensure nested cards use light theme; override any inline dark bg */
-      .card .card { background: var(--panel-2) !important; border-color: var(--border); box-shadow: 0 4px 10px rgba(31,41,55,0.06); }
-
-      .flip-card {
-        background-color: transparent;
-        perspective: 1000px;
-      }
-
-      .flip-card-inner {
-        position: relative;
-        width: 100%;
-        height: 100%;
-        text-align: center;
-        transition: transform 0.6s;
-        transform-style: preserve-3d;
-      }
-
-      .flip-card:hover .flip-card-inner {
-        transform: rotateY(180deg);
-      }
-
-      .flip-card-front, .flip-card-back {
-        position: absolute;
-        width: 100%;
-        height: 100%;
-        -webkit-backface-visibility: hidden;
-        backface-visibility: hidden;
-        border-radius: 8px;
-        padding: 16px;
-      }
-
-      .flip-card-front {
-        background-color: #fff;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-      }
-
-      .flip-card-back {
-        background-color: #f8f9fa;
-        transform: rotateY(180deg);
-        padding: 16px;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+        /* Enhanced Color Palette */
+        --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        --success-gradient: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+        --warning-gradient: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+        --danger-gradient: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%);
+        --info-gradient: linear-gradient(135deg, #74b9ff 0%, #0984e3 100%);
+        --dark-gradient: linear-gradient(135deg, #0c0c0c 0%, #1a1a2e 100%);
+        
+        /* Glass Morphism */
+        --glass-bg: rgba(255, 255, 255, 0.08);
+        --glass-border: rgba(255, 255, 255, 0.15);
+        --glass-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+        
+        /* Neon Colors */
+        --neon-blue: #00d4ff;
+        --neon-green: #39ff14;
+        --neon-pink: #ff1b8d;
+        --neon-purple: #bf00ff;
+        --neon-yellow: #ffff00;
+        
+        /* Advanced Shadows */
+        --shadow-soft: 0 4px 20px rgba(0, 0, 0, 0.1);
+        --shadow-medium: 0 8px 30px rgba(0, 0, 0, 0.15);
+        --shadow-strong: 0 15px 40px rgba(0, 0, 0, 0.25);
+        --shadow-neon: 0 0 20px rgba(0, 212, 255, 0.6);
       }
       
-      .status-message {
-        text-align: center;
-        padding: 2rem;
-        color: var(--muted);
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
       }
+      
+      body {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        background: linear-gradient(135deg, #0F1419 0%, #1A1D29 25%, #16213E 50%, #1A1D29 75%, #0F1419 100%);
+        background-attachment: fixed;
+        min-height: 100vh;
+        color: #e2e8f0;
+        overflow-x: hidden;
+      }
+      
+      /* Enhanced Glass Cards */
+      .glass-card {
+        background: var(--glass-bg);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border: 1px solid var(--glass-border);
+        border-radius: 20px;
+        box-shadow: var(--glass-shadow);
+        transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        position: relative;
+        overflow: hidden;
+      }
+      
+      .glass-card::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 1px;
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+        opacity: 0;
+        transition: opacity 0.3s ease;
+      }
+      
+      .glass-card:hover {
+        transform: translateY(-8px) scale(1.02);
+        box-shadow: var(--shadow-strong), var(--shadow-neon);
+        border-color: var(--neon-blue);
+      }
+      
+      .glass-card:hover::before {
+        opacity: 1;
+      }
+      
+      /* Gradient Text Effects */
+      .gradient-text {
+        background: var(--primary-gradient);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        font-weight: 800;
+      }
+      
+      .neon-text {
+        color: var(--neon-blue);
+        text-shadow: 0 0 10px var(--neon-blue);
+      }
+      
+      /* Advanced Loading Animations */
+      .loading-spinner {
+        width: 50px;
+        height: 50px;
+        border: 4px solid rgba(255,255,255,0.1);
+        border-radius: 50%;
+        border-top-color: var(--neon-blue);
+        border-right-color: var(--neon-green);
+        animation: spin 1.5s cubic-bezier(0.68, -0.55, 0.265, 1.55) infinite;
+        box-shadow: var(--shadow-neon);
+      }
+      
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+      
+      /* Pulse Animations */
+      .pulse-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        animation: pulse 2.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        box-shadow: var(--shadow-neon);
+      }
+      
+      @keyframes pulse {
+        0%, 100% {
+          opacity: 1;
+          transform: scale(1);
+          box-shadow: 0 0 0 0 rgba(0, 212, 255, 0.7);
+        }
+        50% {
+          opacity: 0.7;
+          transform: scale(1.3);
+          box-shadow: 0 0 0 10px rgba(0, 212, 255, 0);
+        }
+      }
+      
+      /* Advanced Button Styles */
+      .btn-gradient {
+        background: var(--primary-gradient);
+        border: none;
+        border-radius: 15px;
+        padding: 12px 24px;
+        color: white;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        position: relative;
+        overflow: hidden;
+        box-shadow: var(--shadow-medium);
+      }
+      
+      .btn-gradient::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: -100%;
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+        transition: left 0.5s;
+      }
+      
+      .btn-gradient:hover {
+        transform: translateY(-2px);
+        box-shadow: var(--shadow-strong), var(--shadow-neon);
+      }
+      
+      .btn-gradient:hover::before {
+        left: 100%;
+      }
+      
+      /* Enhanced Input Styles */
+      .input-glow {
+        background: rgba(255, 255, 255, 0.05);
+        border: 2px solid rgba(255, 255, 255, 0.1);
+        border-radius: 12px;
+        padding: 14px 18px;
+        color: white;
+        font-size: 16px;
+        transition: all 0.3s ease;
+        backdrop-filter: blur(10px);
+      }
+      
+      .input-glow:focus {
+        outline: none;
+        border-color: var(--neon-blue);
+        box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.2), var(--shadow-neon);
+        background: rgba(255, 255, 255, 0.08);
+      }
+      
+      /* Card Categories with Color Coding */
+      .card-performance { border-left: 4px solid var(--neon-green); }
+      .card-analysis { border-left: 4px solid var(--neon-blue); }
+      .card-sentiment { border-left: 4px solid var(--neon-pink); }
+      .card-news { border-left: 4px solid var(--neon-yellow); }
+      .card-portfolio { border-left: 4px solid var(--neon-purple); }
+      
+      /* Responsive Grid System */
+      .dashboard-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+        gap: 24px;
+        padding: 24px;
+      }
+      
+      .dashboard-grid-wide {
+        display: grid;
+        grid-template-columns: 2fr 1fr;
+        gap: 24px;
+        padding: 24px;
+      }
+      
+      /* Advanced Chart Container */
+      .chart-container {
+        position: relative;
+        height: 400px;
+        background: rgba(0, 0, 0, 0.2);
+        border-radius: 12px;
+        padding: 16px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+      }
+      
+      /* Status Indicators */
+      .status-online {
+        background: linear-gradient(135deg, #4ade80, #22c55e);
+        animation: pulse 2s infinite;
+      }
+      
+      .status-warning {
+        background: linear-gradient(135deg, #fbbf24, #f59e0b);
+        animation: pulse 2s infinite;
+      }
+      
+      .status-error {
+        background: linear-gradient(135deg, #ef4444, #dc2626);
+        animation: pulse 2s infinite;
+      }
+      
+      /* Advanced Tooltips */
+      .tooltip {
+        position: relative;
+        cursor: pointer;
+      }
+      
+      .tooltip::after {
+        content: attr(data-tooltip);
+        position: absolute;
+        bottom: 100%;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(0, 0, 0, 0.9);
+        color: white;
+        padding: 8px 12px;
+        border-radius: 8px;
+        font-size: 12px;
+        white-space: nowrap;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.3s ease;
+        z-index: 1000;
+      }
+      
+      .tooltip:hover::after {
+        opacity: 1;
+      }
+      
+      /* Scrollbar Styling */
+      ::-webkit-scrollbar {
+        width: 8px;
+      }
+      
+      ::-webkit-scrollbar-track {
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 4px;
+      }
+      
+      ::-webkit-scrollbar-thumb {
+        background: linear-gradient(135deg, var(--neon-blue), var(--neon-purple));
+        border-radius: 4px;
+      }
+      
+      ::-webkit-scrollbar-thumb:hover {
+        background: linear-gradient(135deg, var(--neon-green), var(--neon-blue));
+      }
+      
+      /* Mobile Responsiveness */
+      @media (max-width: 768px) {
+        .dashboard-grid-wide {
+          grid-template-columns: 1fr;
+        }
+        
+        .glass-card {
+          margin: 12px;
+          border-radius: 16px;
+        }
+        
+        .chart-container {
+          height: 300px;
+        }
+      }
+      
+      /* Advanced Loading Screen */
+      .loading-screen {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: linear-gradient(135deg, #0F1419 0%, #1A1D29 50%, #16213E 100%);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+        transition: opacity 0.8s ease-out;
+      }
+      
+      .loading-screen.fade-out {
+        opacity: 0;
+        pointer-events: none;
+      }
+      
+      .loading-content {
+        text-align: center;
+        animation: fadeInUp 1s ease-out;
+      }
+      
+      @keyframes fadeInUp {
+        from {
+          opacity: 0;
+          transform: translateY(30px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      
+      /* Progress Bars */
+      .progress-bar {
+        width: 100%;
+        height: 8px;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 4px;
+        overflow: hidden;
+        position: relative;
+      }
+      
+      .progress-fill {
+        height: 100%;
+        background: var(--primary-gradient);
+        border-radius: 4px;
+        transition: width 0.3s ease;
+        position: relative;
+        overflow: hidden;
+      }
+      
+      .progress-fill::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        right: 0;
+        background-image: linear-gradient(
+          -45deg,
+          rgba(255, 255, 255, .2) 25%,
+          transparent 25%,
+          transparent 50%,
+          rgba(255, 255, 255, .2) 50%,
+          rgba(255, 255, 255, .2) 75%,
+          transparent 75%,
+          transparent
+        );
+        background-size: 30px 30px;
+        animation: move 2s linear infinite;
+      }
+      
+      @keyframes move {
+        0% { background-position: 0 0; }
+        100% { background-position: 30px 30px; }
+      }
+      
+      /* Data Visualization Enhancements */
+      .metric-card {
+        background: var(--glass-bg);
+        border-radius: 16px;
+        padding: 20px;
+        border: 1px solid var(--glass-border);
+        transition: all 0.3s ease;
+        position: relative;
+        overflow: hidden;
+      }
+      
+      .metric-card::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: linear-gradient(135deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.02) 100%);
+        opacity: 0;
+        transition: opacity 0.3s ease;
+      }
+      
+      .metric-card:hover::before {
+        opacity: 1;
+      }
+      
+      .metric-value {
+        font-size: 2.5rem;
+        font-weight: 800;
+        margin-bottom: 8px;
+        background: var(--primary-gradient);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+      }
+      
+      .metric-label {
+        font-size: 0.875rem;
+        color: rgba(255, 255, 255, 0.7);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        font-weight: 500;
+      }
+      
+      /* AI Insight Cards */
+      .ai-insight {
+        background: linear-gradient(135deg, rgba(116, 75, 162, 0.1), rgba(102, 126, 234, 0.1));
+        border: 1px solid rgba(116, 75, 162, 0.3);
+        border-radius: 12px;
+        padding: 16px;
+        margin-bottom: 12px;
+        position: relative;
+      }
+      
+      .ai-insight::before {
+        content: '🤖';
+        position: absolute;
+        top: -8px;
+        right: -8px;
+        font-size: 24px;
+        filter: drop-shadow(0 0 8px rgba(116, 75, 162, 0.6));
+      }
+      
+      /* Recommendation Cards */
+      .recommendation-strong-buy { border-left: 4px solid #22c55e; background: rgba(34, 197, 94, 0.1); }
+      .recommendation-buy { border-left: 4px solid #4ade80; background: rgba(74, 222, 128, 0.1); }
+      .recommendation-hold { border-left: 4px solid #fbbf24; background: rgba(251, 191, 36, 0.1); }
+      .recommendation-sell { border-left: 4px solid #f87171; background: rgba(248, 113, 113, 0.1); }
+      .recommendation-strong-sell { border-left: 4px solid #ef4444; background: rgba(239, 68, 68, 0.1); }
     </style>
   </head>
+  
   <body>
-    <header>
-      <div class="badge">Stock • RAG • MCP</div>
-      <div class="muted">Demo dashboard (server on <span class="mono">http://localhost:4010</span>)</div>
-    </header>
-
-    <div id="app"></div>
-    <!-- New modular entrypoint -->
-    <script type="module" src="/main-refactored.ts"></script>
-    <!-- Legacy scripts retained temporarily (will be pruned) -->
-    <script type="module" src="/top-picks.ts"></script>
-    <script type="module" src="/top-picks-history.ts"></script>
-    <script type="module" src="/live-cards.ts"></script>
-    <script type="module" src="/masonry.ts"></script>
-    <script type="module" src="/json-viewer.ts"></script>
-    <script type="module" src="/top-picks-delta.ts"></script>
-    <script type="module" src="/strategy-lab.ts"></script>
-    <script type="module" src="/predictions.ts"></script>
-    <script type="module" src="/alerts.ts"></script>
-    <script type="module" src="/lib/events.ts"></script>
-    <script type="module" src="/cards/registry.ts"></script>
-    <script type="module" src="/cards/tl-cache.ts"></script>
-    <script type="module" src="/cards/features-stored.ts"></script>
-    <script type="module" src="/provider-health.ts"></script>
-    <script type="module" src="/portfolio.ts"></script>
-    <script type="module" src="/modules/telemetry.ts"></script>
-    <div class="container">
-      <div class="status-message">
-        <h2>Stock MCP Dashboard</h2>
-        <p>Welcome to the Stock Market Analysis Platform</p>
-        <p><strong>Note:</strong> The modern visual dashboard is available in the <code>performance-optimization</code> branch.</p>
-        <p>Current main branch provides basic functionality.</p>
+    <!-- Advanced Loading Screen -->
+    <div id="loading-screen" class="loading-screen">
+      <div class="loading-content">
+        <div class="loading-spinner mb-6"></div>
+        <h2 class="text-4xl font-bold gradient-text mb-3">📈 Stock Intelligence Hub</h2>
+        <p class="text-lg text-gray-300 mb-6">Loading AI-powered market intelligence...</p>
+        <div class="flex justify-center space-x-3">
+          <div class="pulse-dot" style="background: var(--neon-blue);"></div>
+          <div class="pulse-dot" style="background: var(--neon-green); animation-delay: 0.2s;"></div>
+          <div class="pulse-dot" style="background: var(--neon-pink); animation-delay: 0.4s;"></div>
+          <div class="pulse-dot" style="background: var(--neon-purple); animation-delay: 0.6s;"></div>
+          <div class="pulse-dot" style="background: var(--neon-yellow); animation-delay: 0.8s;"></div>
+        </div>
+        <div class="mt-8 w-64 mx-auto">
+          <div class="progress-bar">
+            <div class="progress-fill" id="loading-progress" style="width: 0%"></div>
+          </div>
+          <p class="text-sm text-gray-400 mt-2" id="loading-text">Initializing AI models...</p>
+        </div>
       </div>
     </div>
-    
-    <!-- Basic scripts for compatibility -->
-    <script type="module">
-      console.log('Stock MCP Dashboard - Main Branch');
-      console.log('For the full visual dashboard, check the performance-optimization branch');
-      
-      // Basic API connectivity test
-      fetch('/api/health')
-        .then(response => response.json())
-        .then(data => {
-          console.log('Server health check:', data);
-          if (data.ok) {
-            document.querySelector('.status-message').innerHTML += 
-              '<div style="color: var(--success); margin-top: 1rem;">✅ Server is running successfully</div>';
-          }
-        })
-        .catch(error => {
-          console.error('Server connectivity issue:', error);
-          document.querySelector('.status-message').innerHTML += 
-            '<div style="color: var(--danger); margin-top: 1rem;">❌ Server connection failed</div>';
-        });
-    </script>
 
+    <!-- Main Dashboard -->
+    <div id="app" class="hidden min-h-screen">
+      <!-- Navigation Header -->
+      <header class="glass-card mx-6 mt-6 p-6 mb-6">
+        <div class="flex items-center justify-between flex-wrap gap-4">
+          <div class="flex items-center space-x-6">
+            <div class="text-3xl font-bold gradient-text flex items-center">
+              <i class="fas fa-brain mr-3 neon-text"></i>
+              Stock Intelligence Hub
+            </div>
+            <div class="flex space-x-3">
+              <span class="px-4 py-2 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-full text-sm font-semibold flex items-center">
+                <i class="fas fa-robot mr-2"></i>AI-Powered
+              </span>
+              <span class="px-4 py-2 bg-gradient-to-r from-green-500 to-teal-600 text-white rounded-full text-sm font-semibold flex items-center">
+                <i class="fas fa-chart-line mr-2"></i>Real-Time
+              </span>
+              <span class="px-4 py-2 bg-gradient-to-r from-pink-500 to-rose-600 text-white rounded-full text-sm font-semibold flex items-center">
+                <i class="fas fa-lightbulb mr-2"></i>Intelligent
+              </span>
+            </div>
+          </div>
+          
+          <!-- Advanced Status Panel -->
+          <div class="flex items-center space-x-4">
+            <div id="server-status" class="flex items-center space-x-2">
+              <div class="pulse-dot status-online"></div>
+              <span class="text-sm font-medium text-green-400">System Online</span>
+            </div>
+            <div class="flex items-center space-x-2">
+              <i class="fas fa-clock text-gray-400"></i>
+              <span class="text-sm text-gray-400" id="live-time"></span>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <!-- Advanced Search & Control Panel -->
+      <div class="glass-card mx-6 mb-6 p-6 card-analysis">
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-4 items-end">
+          <div class="lg:col-span-3">
+            <label class="block text-sm font-semibold text-gray-300 mb-3 flex items-center">
+              <i class="fas fa-search mr-2 text-blue-400"></i>Stock Symbol
+            </label>
+            <input 
+              id="stock-input" 
+              type="text" 
+              placeholder="Enter symbol (e.g., AAPL, BEL.NS)"
+              class="input-glow w-full"
+              autocomplete="off"
+            />
+            <div id="symbol-suggestions" class="hidden absolute z-10 w-full bg-gray-800 rounded-lg mt-1 border border-gray-600"></div>
+          </div>
+          
+          <div class="lg:col-span-2">
+            <label class="block text-sm font-semibold text-gray-300 mb-3">Time Horizon</label>
+            <select id="time-horizon" class="input-glow w-full">
+              <option value="short">Short Term (1-7 days)</option>
+              <option value="medium" selected>Medium Term (1-3 months)</option>
+              <option value="long">Long Term (3+ months)</option>
+            </select>
+          </div>
+          
+          <div class="lg:col-span-2">
+            <button id="analyze-btn" class="btn-gradient w-full flex items-center justify-center">
+              <i class="fas fa-analytics mr-2"></i>Analyze
+            </button>
+          </div>
+          
+          <div class="lg:col-span-2">
+            <button id="ingest-btn" class="btn-gradient w-full flex items-center justify-center" style="background: var(--success-gradient);">
+              <i class="fas fa-download mr-2"></i>Ingest Data
+            </button>
+          </div>
+          
+          <div class="lg:col-span-2">
+            <button id="recommend-btn" class="btn-gradient w-full flex items-center justify-center" style="background: var(--warning-gradient);">
+              <i class="fas fa-magic mr-2"></i>Get Recommendations
+            </button>
+          </div>
+          
+          <div class="lg:col-span-1">
+            <button id="portfolio-btn" class="btn-gradient w-full flex items-center justify-center" style="background: var(--info-gradient);">
+              <i class="fas fa-briefcase mr-2"></i>Portfolio
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Main Dashboard Grid -->
+      <div class="dashboard-grid-wide">
+        <!-- Left Column: Charts & Analysis -->
+        <div class="space-y-6">
+          <!-- Advanced Price Chart -->
+          <div class="glass-card p-6 card-performance">
+            <div class="flex items-center justify-between mb-6">
+              <h3 class="text-2xl font-bold flex items-center neon-text">
+                <i class="fas fa-chart-candlestick mr-3"></i>
+                Price Analysis & Trends
+              </h3>
+              <div class="flex space-x-2">
+                <button class="px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-all duration-300" data-timeframe="1D">1D</button>
+                <button class="px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-all duration-300" data-timeframe="1W">1W</button>
+                <button class="px-3 py-2 bg-blue-600 rounded-lg text-sm" data-timeframe="1M">1M</button>
+                <button class="px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-all duration-300" data-timeframe="3M">3M</button>
+                <button class="px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-all duration-300" data-timeframe="1Y">1Y</button>
+              </div>
+            </div>
+            <div class="chart-container">
+              <canvas id="price-chart"></canvas>
+            </div>
+            <div class="mt-4 grid grid-cols-4 gap-4">
+              <div class="metric-card">
+                <div class="metric-value" id="current-price">$0.00</div>
+                <div class="metric-label">Current Price</div>
+              </div>
+              <div class="metric-card">
+                <div class="metric-value" id="price-change">0.00%</div>
+                <div class="metric-label">24h Change</div>
+              </div>
+              <div class="metric-card">
+                <div class="metric-value" id="volume">0</div>
+                <div class="metric-label">Volume</div>
+              </div>
+              <div class="metric-card">
+                <div class="metric-value" id="market-cap">$0</div>
+                <div class="metric-label">Market Cap</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Volume & Technical Analysis -->
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div class="glass-card p-6 card-analysis">
+              <h4 class="text-xl font-bold mb-4 flex items-center text-cyan-400">
+                <i class="fas fa-water mr-3"></i>Volume Analysis
+              </h4>
+              <div class="chart-container" style="height: 250px;">
+                <canvas id="volume-chart"></canvas>
+              </div>
+            </div>
+            
+            <div class="glass-card p-6 card-analysis">
+              <h4 class="text-xl font-bold mb-4 flex items-center text-yellow-400">
+                <i class="fas fa-signal mr-3"></i>Technical Indicators
+              </h4>
+              <div id="technical-indicators" class="space-y-3">
+                <!-- Technical indicators will be populated by JavaScript -->
+              </div>
+            </div>
+          </div>
+
+          <!-- Performance Heatmap & Correlation Matrix -->
+          <div class="glass-card p-6 card-performance">
+            <h3 class="text-xl font-bold mb-4 flex items-center text-orange-400">
+              <i class="fas fa-th mr-3"></i>Performance Heatmap
+            </h3>
+            <div id="heatmap-chart" class="chart-container"></div>
+          </div>
+        </div>
+
+        <!-- Right Column: Intelligence & Recommendations -->
+        <div class="space-y-6">
+          <!-- AI Recommendations Panel -->
+          <div class="glass-card p-6 card-sentiment">
+            <h3 class="text-xl font-bold mb-4 flex items-center text-pink-400">
+              <i class="fas fa-brain mr-3"></i>AI Recommendations
+            </h3>
+            <div id="recommendations-panel">
+              <div class="ai-insight">
+                <div class="text-sm text-gray-400 mb-2">Loading intelligent recommendations...</div>
+                <div class="loading-spinner" style="width: 30px; height: 30px;"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Sentiment Analysis Gauge -->
+          <div class="glass-card p-6 card-sentiment">
+            <h4 class="text-xl font-bold mb-4 flex items-center text-red-400">
+              <i class="fas fa-heart mr-3"></i>Market Sentiment
+            </h4>
+            <div id="sentiment-gauge" class="flex justify-center"></div>
+            <div class="mt-4 space-y-2">
+              <div class="flex justify-between items-center">
+                <span class="text-sm text-gray-400">News Sentiment</span>
+                <span class="text-sm font-semibold" id="news-sentiment">--</span>
+              </div>
+              <div class="flex justify-between items-center">
+                <span class="text-sm text-gray-400">Social Sentiment</span>
+                <span class="text-sm font-semibold" id="social-sentiment">--</span>
+              </div>
+              <div class="flex justify-between items-center">
+                <span class="text-sm text-gray-400">Overall Score</span>
+                <span class="text-sm font-semibold" id="overall-sentiment">--</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Latest News & Events -->
+          <div class="glass-card p-6 card-news">
+            <h4 class="text-xl font-bold mb-4 flex items-center text-yellow-400">
+              <i class="fas fa-newspaper mr-3"></i>Latest News & Events
+            </h4>
+            <div id="news-feed" class="space-y-3 max-h-80 overflow-y-auto">
+              <!-- News will be populated by JavaScript -->
+            </div>
+          </div>
+
+          <!-- Portfolio Overview -->
+          <div class="glass-card p-6 card-portfolio">
+            <h4 class="text-xl font-bold mb-4 flex items-center text-purple-400">
+              <i class="fas fa-pie-chart mr-3"></i>Portfolio Overview
+            </h4>
+            <div id="portfolio-chart" class="chart-container" style="height: 300px;"></div>
+            <div class="mt-4">
+              <div class="flex justify-between items-center mb-2">
+                <span class="text-sm text-gray-400">Total Value</span>
+                <span class="text-sm font-semibold text-green-400" id="portfolio-value">$0.00</span>
+              </div>
+              <div class="flex justify-between items-center">
+                <span class="text-sm text-gray-400">24h Change</span>
+                <span class="text-sm font-semibold" id="portfolio-change">0.00%</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- RAG Query Interface -->
+      <div class="glass-card mx-6 mt-6 p-6 card-analysis">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div>
+            <h3 class="text-xl font-bold mb-4 flex items-center text-green-400">
+              <i class="fas fa-comments mr-3"></i>AI Assistant (RAG)
+            </h3>
+            <div class="mb-4">
+              <textarea 
+                id="rag-query" 
+                placeholder="Ask me anything about the stock... (e.g., What is the latest guidance? How is the company performing?)"  
+                class="input-glow w-full resize-none"
+                rows="4"
+              ></textarea>
+              <div class="flex space-x-3 mt-3">
+                <button id="submit-rag-query" class="btn-gradient flex items-center">
+                  <i class="fas fa-paper-plane mr-2"></i>Ask AI
+                </button>
+                <button id="clear-rag-query" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors">
+                  <i class="fas fa-trash mr-2"></i>Clear
+                </button>
+              </div>
+            </div>
+          </div>
+          
+          <div>
+            <h4 class="text-lg font-semibold mb-4 flex items-center">
+              <i class="fas fa-robot mr-2 text-blue-400"></i>AI Response
+            </h4>
+            <div id="rag-response" class="bg-gray-800 bg-opacity-50 rounded-lg p-4 text-sm text-gray-300 max-h-64 overflow-y-auto border border-gray-600">
+              <div class="flex items-center space-x-2 text-gray-500">
+                <i class="fas fa-info-circle"></i>
+                <span>AI responses will appear here...</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Similar Stocks Recommendations -->
+      <div class="glass-card mx-6 mt-6 mb-6 p-6 card-performance">
+        <h3 class="text-xl font-bold mb-4 flex items-center text-indigo-400">
+          <i class="fas fa-sitemap mr-3"></i>Similar Stocks & Recommendations
+        </h3>
+        <div id="similar-stocks" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+          <!-- Similar stocks will be populated by JavaScript -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Load Scripts -->
+    <script type="module" src="/src/js/api-client.js"></script>
+    <script type="module" src="/src/js/visualizations.js"></script>
+    <script type="module" src="/src/js/recommendations.js"></script>
+    <script type="module" src="/src/js/dashboard.js"></script>
+    
+    <!-- Initialize Application -->
+    <script>
+      // Initialize notification system
+      const notyf = new Notyf({
+        duration: 4000,
+        position: { x: 'right', y: 'top' },
+        types: [
+          {
+            type: 'success',
+            background: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
+            icon: { className: 'fas fa-check', tagName: 'i', color: 'white' }
+          },
+          {
+            type: 'error',
+            background: 'linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%)',
+            icon: { className: 'fas fa-exclamation-triangle', tagName: 'i', color: 'white' }
+          },
+          {
+            type: 'warning',
+            background: 'linear-gradient(135deg, #fa709a 0%, #fee140 100%)',
+            icon: { className: 'fas fa-exclamation', tagName: 'i', color: 'white' }
+          },
+          {
+            type: 'info',
+            background: 'linear-gradient(135deg, #74b9ff 0%, #0984e3 100%)',
+            icon: { className: 'fas fa-info', tagName: 'i', color: 'white' }
+          }
+        ]
+      });
+      
+      window.notyf = notyf;
+      
+      // Enhanced loading screen with progress
+      document.addEventListener('DOMContentLoaded', function() {
+        const loadingSteps = [
+          { text: 'Initializing AI models...', duration: 500 },
+          { text: 'Loading market data...', duration: 800 },
+          { text: 'Connecting to servers...', duration: 600 },
+          { text: 'Preparing visualizations...', duration: 700 },
+          { text: 'Starting intelligence engine...', duration: 400 }
+        ];
+        
+        let currentStep = 0;
+        let progress = 0;
+        
+        const progressBar = document.getElementById('loading-progress');
+        const loadingText = document.getElementById('loading-text');
+        
+        function updateProgress() {
+          if (currentStep < loadingSteps.length) {
+            const step = loadingSteps[currentStep];
+            loadingText.textContent = step.text;
+            
+            const targetProgress = ((currentStep + 1) / loadingSteps.length) * 100;
+            
+            const progressInterval = setInterval(() => {
+              progress += 2;
+              progressBar.style.width = Math.min(progress, targetProgress) + '%';
+              
+              if (progress >= targetProgress) {
+                clearInterval(progressInterval);
+                currentStep++;
+                
+                if (currentStep < loadingSteps.length) {
+                  setTimeout(updateProgress, 100);
+                } else {
+                  setTimeout(() => {
+                    document.getElementById('loading-screen').classList.add('fade-out');
+                    setTimeout(() => {
+                      document.getElementById('loading-screen').remove();
+                      document.getElementById('app').classList.remove('hidden');
+                      document.getElementById('app').classList.add('fade-in');
+                      
+                      // Show welcome notification
+                      notyf.success('🚀 Stock Intelligence Hub loaded successfully!');
+                    }, 800);
+                  }, 500);
+                }
+              }
+            }, 20);
+          }
+        }
+        
+        setTimeout(updateProgress, 500);
+        
+        // Update live time
+        function updateTime() {
+          const now = new Date();
+          const timeString = now.toLocaleTimeString('en-US', {
+            hour12: false,
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+          });
+          document.getElementById('live-time').textContent = timeString;
+        }
+        
+        updateTime();
+        setInterval(updateTime, 1000);
+      });
+      
+      // Add fade-in animation class
+      const style = document.createElement('style');
+      style.textContent = `
+        .fade-in {
+          animation: fadeIn 0.8s ease-out;
+        }
+        
+        @keyframes fadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+      `;
+      document.head.appendChild(style);
+    </script>
   </body>
 </html>
