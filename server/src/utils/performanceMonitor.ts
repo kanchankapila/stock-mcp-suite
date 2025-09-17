@@ -7,7 +7,7 @@ import { globalRateLimiter } from './apiRateLimiter.js';
  */
 export class PerformanceMonitor {
   private metrics: PerformanceMetrics;
-  private monitoringInterval: NodeJS.Timer | null = null;
+  private monitoringInterval: NodeJS.Timeout | null = null;
   private alertThresholds: AlertThresholds;
 
   constructor() {
@@ -57,7 +57,7 @@ export class PerformanceMonitor {
    */
   stop(): void {
     if (this.monitoringInterval) {
-      clearInterval(this.monitoringInterval);
+      clearTimeout(this.monitoringInterval);
       this.monitoringInterval = null;
     }
     logger.info('performance_monitoring_stopped');
@@ -240,13 +240,22 @@ export class PerformanceMonitor {
     
     for (const alert of alerts) {
       if (alert.severity === 'high') {
-        logger.error(alert, 'performance_alert_high');
+        logger.error({ alert: this.serializeAlert(alert) }, 'performance_alert_high');
       } else if (alert.severity === 'medium') {
-        logger.warn(alert, 'performance_alert_medium');
+        logger.warn({ alert: this.serializeAlert(alert) }, 'performance_alert_medium');
       } else {
-        logger.info(alert, 'performance_alert_low');
+        logger.info({ alert: this.serializeAlert(alert) }, 'performance_alert_low');
       }
     }
+  }
+
+  private serializeAlert(alert: Alert): Record<string, any> {
+    return {
+      type: alert.type,
+      severity: alert.severity,
+      message: alert.message,
+      timestamp: alert.timestamp
+    };
   }
 
   private logPerformanceReport(): void {
