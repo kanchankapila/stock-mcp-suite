@@ -17,12 +17,17 @@ import { trackJobExecution, globalPerformanceMonitor } from '../utils/performanc
 import * as trendlyne from '../providers/trendlyne.js';
 import * as external from '../providers/external.js';
 
+type YFinCompat = {
+  ok?: boolean;
+  [key: string]: any;
+};
+
 /**
  * Optimized prefetch system with intelligent job management
  */
 export class OptimizedPrefetchManager {
   private isRunning = false;
-  private schedulers = new Map<string, NodeJS.Timer>();
+  private schedulers = new Map<string, NodeJS.Timeout>();
   private jobQueue = new Map<string, PrefetchJob[]>();
   private processingJobs = new Set<string>();
   private stats = {
@@ -120,7 +125,7 @@ export class OptimizedPrefetchManager {
 
     // Clear all schedulers
     for (const [jobType, timer] of this.schedulers) {
-      clearInterval(timer);
+      clearTimeout(timer);
       logger.debug({ jobType }, 'prefetch_scheduler_stopped');
     }
     this.schedulers.clear();
@@ -515,7 +520,7 @@ export class OptimizedPrefetchManager {
       try {
         const yfin = await globalRateLimiter.execute('yahoo', async () => {
           return await fetchYahooFin(symbol, '1y', '1d');
-        }, priority);
+        }, priority) as YFinCompat;
         
         if (!yfin || yfin.ok === false) {
           await this.sleep(1000); // Brief pause for failed requests
