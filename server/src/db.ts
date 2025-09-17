@@ -1282,9 +1282,6 @@ export function insertMcOptionsSnapshot(mc_symbol: string, rows: Array<{ expiry:
 
 function safeJson(x: any) { try { return JSON.parse(String(x)); } catch { return null; } }
 
-function safeJson(x: any) { 
-  try { return JSON.parse(String(x)); } catch { return null; } 
-}
 
 // Cleanup function to be called on app shutdown
 export function cleanup() {
