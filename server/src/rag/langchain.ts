@@ -176,9 +176,10 @@ export async function loadFromUrls(urls: string[], ns?: Namespace) {
   return docs;
 }
 
-export async function splitDocs(docs: Document[]) {
+export async function splitDocs(docs: Document[]): Promise<Document[]> {
   const splitter = new RecursiveCharacterTextSplitter({ chunkSize: 1000, chunkOverlap: 150 });
-  return splitter.splitDocuments(docs);
+  const chunks = await splitter.splitDocuments(docs);
+  return chunks;
 }
 
 export async function indexNamespace(ns: Namespace, input: { urls?: string[], texts?: { text: string, metadata?: Record<string, unknown> }[] }) {
