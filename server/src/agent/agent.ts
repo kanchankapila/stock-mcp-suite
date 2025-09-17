@@ -172,3 +172,8 @@ export async function agentAnswerStream(prompt: string, explicitSymbol: string |
     onChunk({ type: 'error', data: String(err?.message || err) });
   }
 }
+
+export async function queryAgent(prompt: string, context?: { symbol?: string }) {
+  const symbol = context?.symbol;
+  return agentAnswer(prompt, symbol);
+}

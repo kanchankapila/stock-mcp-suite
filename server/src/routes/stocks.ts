@@ -1,4 +1,5 @@
 import { Router } from 'express';
+
 import db, { upsertStock, insertPriceRow, insertNewsRow, listPrices, listNews, saveAnalysis, getMcTech, upsertMcTech, getLatestOptionsBias, listOptionsMetrics, insertProviderData, upsertProvider } from '../db.js';
 import { fetchDailyTimeSeries, parseAlphaDaily } from '../providers/alphaVantage.js';
 import { fetchNews, parseNews } from '../providers/news.js';
@@ -21,6 +22,43 @@ import { spawn } from 'child_process';
 import { ResponseUtils } from '../shared/utils/response.utils.js';
 import { computeTopPicks, parseWeights } from '../services/topPicks.js';
 import yahooFinance from 'yahoo-finance2';
+
+export function getOverview(rawSymbol: string) {
+  const symbol = (rawSymbol || '').toUpperCase();
+  if (!symbol) return null;
+  const prices = listPrices(symbol, 2000) as Array<{ date: string; open: number; high: number; low: number; close: number; volume: number | null }>;
+  if (!prices.length) return null;
+
+  const first = prices[0];
+  const last = prices[prices.length - 1];
+  const change = last.close - first.close;
+  const changePct = first.close ? (change / first.close) * 100 : 0;
+  const highs = prices.map(p => (typeof p.high === 'number' && Number.isFinite(p.high) ? p.high : p.close));
+  const lows = prices.map(p => (typeof p.low === 'number' && Number.isFinite(p.low) ? p.low : p.close));
+  const volumes = prices
+    .map(p => (typeof p.volume === 'number' && Number.isFinite(p.volume) ? Number(p.volume) : null))
+    .filter((v): v is number => v !== null);
+  const high52Week = highs.length ? Math.max(...highs) : last.close;
+  const low52Week = lows.length ? Math.min(...lows) : last.close;
+  const averageVolume = volumes.length ? volumes.reduce((sum, v) => sum + v, 0) / volumes.length : null;
+
+  return {
+    symbol,
+    currentPrice: last.close,
+    change,
+    changePercent: changePct,
+    lastClose: last.close,
+    periodChangePct: changePct,
+    nPrices: prices.length,
+    volume: typeof last.volume === 'number' && Number.isFinite(last.volume) ? Number(last.volume) : null,
+    averageVolume,
+    high52Week,
+    low52Week,
+    firstDate: first.date,
+    lastDate: last.date
+  };
+}
+
 
 export const router = Router();
 
@@ -167,18 +205,9 @@ router.post('/ingest/:symbol', asyncHandler(async (req, res) => {
 
 router.get('/stocks/:symbol/overview', asyncHandler(async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
-  const prices = listPrices(symbol, 2000);
-  if (!prices.length) return res.status(404).json(ResponseUtils.notFound('data'));
-  const last = prices[prices.length-1];
-  const first = prices[0];
-  const change = last.close - first.close;
-  const changePct = (change/first.close)*100;
-  res.json(ResponseUtils.success({
-    symbol,
-    lastClose: last.close,
-    periodChangePct: changePct,
-    nPrices: prices.length
-  }));
+  const overview = getOverview(symbol);
+  if (!overview) return res.status(404).json(ResponseUtils.notFound('data'));
+  res.json(ResponseUtils.success(overview));
 }));
 
 router.get('/stocks/:symbol/history', asyncHandler((req, res) => {

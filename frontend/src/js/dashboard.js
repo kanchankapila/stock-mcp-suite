@@ -5,8 +5,18 @@ class StockDashboard {
     this.wsConnection = null;
     this.updateInterval = null;
     this.isLoading = false;
+    this.isActive = this.hasRequiredDom();
+    
+    if (!this.isActive) {
+      console.warn('StockDashboard: required DOM elements not found. Skipping legacy initialization.');
+      return;
+    }
     
     this.init();
+  }
+
+  hasRequiredDom() {
+    return Boolean(document.getElementById('stock-input'));
   }
 
   init() {
@@ -87,7 +97,12 @@ class StockDashboard {
     try {
       // Load a default symbol for demonstration
       const defaultSymbol = 'AAPL';
-      document.getElementById('stock-input').value = defaultSymbol;
+      const stockInput = document.getElementById('stock-input');
+      if (!stockInput) {
+        console.warn('StockDashboard: stock-input element missing; skipping default data load.');
+        return;
+      }
+      stockInput.value = defaultSymbol;
       await this.analyzeStock(defaultSymbol, false);
       
       // Load portfolio data
@@ -100,6 +115,9 @@ class StockDashboard {
 
   // Main stock analysis function
   async analyzeStock(symbol = null, showLoading = true) {
+    if (!this.isActive) {
+      return;
+    }
     const stockInput = document.getElementById('stock-input');
     const targetSymbol = symbol || stockInput?.value?.trim().toUpperCase();
     

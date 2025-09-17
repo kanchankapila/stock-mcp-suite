@@ -129,34 +129,7 @@
     </div>
 
     <!-- Main Dashboard -->
-    <div id="app" class="hidden">
-      <!-- Navigation Header -->
-      <header class="glass-card mx-4 mt-4 p-4">
-        <div class="flex items-center justify-between">
-          <div class="flex items-center space-x-4">
-            <div class="text-2xl font-bold gradient-text flex items-center">
-              <i class="fas fa-chart-line mr-2"></i>
-              Stock Analytics Hub
-            </div>
-            <div class="flex space-x-2">
-              <span class="px-3 py-1 bg-blue-500 bg-opacity-20 text-blue-300 rounded-full text-sm font-medium">
-                <i class="fas fa-robot mr-1"></i>AI-Powered
-              </span>
-              <span class="px-3 py-1 bg-green-500 bg-opacity-20 text-green-300 rounded-full text-sm font-medium">
-                <i class="fas fa-broadcast-tower mr-1"></i>Real-Time
-              </span>
-            </div>
-          </div>
-          
-          <!-- Server Status -->
-          <div id="server-status" class="flex items-center space-x-2">
-            <div class="pulse-dot bg-green-500"></div>
-            <span class="text-sm text-gray-400">Server Connected</span>
-          </div>
-        </div>
-      </header>
-
-    <div id="app"></div>
+    <div id="app" class="hidden"></div>
     <!-- New modular entrypoint -->
     <script type="module" src="/main.ts"></script>
     <!-- Legacy scripts retained temporarily (will be pruned) -->
@@ -186,19 +159,28 @@
     </div>
 
     <!-- Scripts -->
-    <script type="module" src="/src/js/dashboard.js"></script>
-    <script type="module" src="/src/js/visualizations.js"></script>
-    <script type="module" src="/src/js/api-client.js"></script>
+    <script type="module" src="/js/dashboard.js"></script>
+    <script type="module" src="/js/visualizations.js"></script>
+    <script type="module" src="/js/api-client.js"></script>
     
     <script>
-      // Initialize loading screen
-      document.addEventListener('DOMContentLoaded', function() {
-        setTimeout(function() {
-          document.getElementById('loading-screen').classList.add('hidden');
-          document.getElementById('app').classList.remove('hidden');
-          document.getElementById('app').classList.add('fade-in');
-        }, 2000);
-      });
+      const revealApp = () => {
+        const loading = document.getElementById('loading-screen');
+        const appRoot = document.getElementById('app');
+        if (loading) loading.classList.add('hidden');
+        if (appRoot) {
+          appRoot.classList.remove('hidden');
+          appRoot.classList.add('fade-in');
+        }
+      };
+
+      const scheduleReveal = () => window.setTimeout(revealApp, 2000);
+
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', scheduleReveal, { once: true });
+      } else {
+        scheduleReveal();
+      }
     </script>
   </body>
 </html>

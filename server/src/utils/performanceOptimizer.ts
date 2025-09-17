@@ -1,6 +1,6 @@
-// Performance Optimization Suite for Stock MCP Server
+﻿// Performance Optimization Suite for Stock MCP Server
 import { logger } from './logger.js';
-import { LRUCache } from 'lru-cache';
+import LRUCache from 'lru-cache';
 import compression from 'compression';
 import rateLimit from 'express-rate-limit';
 import slowDown from 'express-slow-down';
@@ -268,10 +268,17 @@ export function createRateLimiters() {
     legacyHeaders: false,
     handler: (req: Request, res: Response) => {
       logger.warn({ ip: req.ip, url: req.url }, 'rate_limit_exceeded');
+      const resetTime = (req as any).rateLimit?.resetTime;
+      let retryAfterSeconds: number | null = null;
+      if (typeof resetTime === 'number') {
+        retryAfterSeconds = Math.max(0, Math.ceil(resetTime / 1000));
+      } else if (resetTime instanceof Date) {
+        retryAfterSeconds = Math.max(0, Math.ceil((resetTime.getTime() - Date.now()) / 1000));
+      }
       res.status(429).json({
         ok: false,
         error: 'Rate limit exceeded',
-        retryAfter: Math.ceil(req.rateLimit?.resetTime / 1000)
+        retryAfter: retryAfterSeconds
       });
     }
   });
@@ -286,14 +293,14 @@ export function createRateLimiters() {
   });
 
   // Slow down middleware for progressive delays
-  const slowDown = slowDown({
+  const slowDownMiddleware = slowDown({
     windowMs: 15 * 60 * 1000, // 15 minutes
     delayAfter: 500, // Allow 500 requests per 15 minutes at full speed
     delayMs: 100, // Add 100ms delay per request after delayAfter
     maxDelayMs: 2000, // Max delay of 2 seconds
   });
 
-  return { generalLimiter, strictLimiter, slowDown };
+  return { generalLimiter, strictLimiter, slowDown: slowDownMiddleware };
 }
 
 // Request optimization middleware
@@ -441,11 +448,11 @@ export function setupPerformanceMiddleware(app: any) {
   app.use(createCompressionMiddleware());
   
   // Rate limiting
-  const { generalLimiter, strictLimiter, slowDown } = createRateLimiters();
+  const { generalLimiter, strictLimiter, slowDown: slowDownMiddleware } = createRateLimiters();
   app.use('/api', generalLimiter);
   app.use('/api/ingest', strictLimiter);
   app.use('/api/backtest', strictLimiter);
-  app.use(slowDown);
+  app.use(slowDownMiddleware);
   
   // Request optimization
   app.use(createRequestOptimizer());
@@ -460,3 +467,7 @@ export function setupPerformanceMiddleware(app: any) {
   
   logger.info('performance_middleware_configured');
 }
+
+
+
+

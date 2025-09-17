@@ -15,15 +15,35 @@ class StockVisualizations {
 
   // Initialize Chart.js defaults
   initializeChartDefaults() {
-    if (typeof Chart !== 'undefined') {
-      Chart.defaults.color = '#e2e8f0';
-      Chart.defaults.backgroundColor = 'rgba(102, 126, 234, 0.1)';
-      Chart.defaults.borderColor = 'rgba(102, 126, 234, 0.3)';
-      Chart.defaults.plugins.legend.labels.color = '#e2e8f0';
-      Chart.defaults.scales.linear.grid.color = 'rgba(255, 255, 255, 0.1)';
-      Chart.defaults.scales.linear.ticks.color = '#9ca3af';
-      Chart.defaults.scales.category.grid.color = 'rgba(255, 255, 255, 0.1)';
-      Chart.defaults.scales.category.ticks.color = '#9ca3af';
+    if (typeof Chart === 'undefined' || !Chart.defaults) {
+      console.warn('StockVisualizations: Chart.js not detected; skipping defaults configuration.');
+      return;
+    }
+
+    const defaults = Chart.defaults;
+    defaults.color = '#e2e8f0';
+    defaults.backgroundColor = 'rgba(102, 126, 234, 0.1)';
+    defaults.borderColor = 'rgba(102, 126, 234, 0.3)';
+
+    if (defaults.plugins) {
+      defaults.plugins.legend = defaults.plugins.legend || {};
+      defaults.plugins.legend.labels = defaults.plugins.legend.labels || {};
+      defaults.plugins.legend.labels.color = '#e2e8f0';
+    }
+
+    if (defaults.scales) {
+      if (defaults.scales.linear) {
+        defaults.scales.linear.grid = defaults.scales.linear.grid || {};
+        defaults.scales.linear.grid.color = 'rgba(255, 255, 255, 0.1)';
+        defaults.scales.linear.ticks = defaults.scales.linear.ticks || {};
+        defaults.scales.linear.ticks.color = '#9ca3af';
+      }
+      if (defaults.scales.category) {
+        defaults.scales.category.grid = defaults.scales.category.grid || {};
+        defaults.scales.category.grid.color = 'rgba(255, 255, 255, 0.1)';
+        defaults.scales.category.ticks = defaults.scales.category.ticks || {};
+        defaults.scales.category.ticks.color = '#9ca3af';
+      }
     }
   }
 
@@ -335,8 +355,14 @@ class StockVisualizations {
 
   // Create portfolio pie chart
   createPortfolioChart(containerId, portfolioData) {
+    const container = document.getElementById(containerId);
+    if (!container) {
+      console.warn(`StockVisualizations: container "${containerId}" not found; skipping portfolio chart.`);
+      return;
+    }
+
     if (!portfolioData || !portfolioData.length) {
-      document.getElementById(containerId).innerHTML = '<p class="text-gray-400 text-center">No portfolio data available</p>';
+      container.innerHTML = '<p class="text-gray-400 text-center">No portfolio data available</p>';
       return;
     }
 
@@ -383,13 +409,10 @@ class StockVisualizations {
       }
     };
 
-    const container = document.getElementById(containerId);
-    if (container) {
-      container.innerHTML = '';
-      const chart = new ApexCharts(container, options);
-      chart.render();
-      return chart;
-    }
+    container.innerHTML = '';
+    const chart = new ApexCharts(container, options);
+    chart.render();
+    return chart;
   }
 
   // Update metrics display

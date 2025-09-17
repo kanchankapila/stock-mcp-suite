@@ -1,4 +1,4 @@
-// Enhanced MCP (Model Context Protocol) Server Implementation
+﻿// Enhanced MCP (Model Context Protocol) Server Implementation
 // Provides standardized tool interface for AI agents and LLMs
 
 import express from 'express';
@@ -415,6 +415,9 @@ class MCPToolExecutor {
 
   private static async getStockOverview(symbol: string) {
     const overview = await getOverview(symbol);
+    if (!overview) {
+      throw new Error(`No overview data for ${symbol}`);
+    }
     return {
       ok: true,
       tool: 'get_stock_overview',

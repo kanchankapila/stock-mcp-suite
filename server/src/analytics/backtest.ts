@@ -3,6 +3,7 @@
 // Returns equity curve & summary stats.
 
 import { scoreStrategy } from './scoring.js';
+import { listPrices } from '../db.js';
 
 type Pt = { date: string, close: number };
 
@@ -64,3 +65,86 @@ export function backtestSMA(data: Pt[], fast=10, slow=20) {
 }
 
 export { scoreStrategy };
+
+function dailyReturns(series: number[]): number[] {
+  const out: number[] = [];
+  for (let i = 1; i < series.length; i++) {
+    const prev = series[i - 1];
+    const curr = series[i];
+    if (prev > 0) {
+      out.push((curr - prev) / prev);
+    }
+  }
+  return out;
+}
+
+function maxDrawdown(series: number[]): number {
+  let peak = Number.NEGATIVE_INFINITY;
+  let maxDd = 0;
+  for (const value of series) {
+    if (value > peak) peak = value;
+    const dd = peak > 0 ? (value - peak) / peak : 0;
+    if (dd < maxDd) maxDd = dd;
+  }
+  return Math.abs(maxDd);
+}
+
+export function runBacktest(symbol: string, strategy = 'sma_cross', startDate?: string, initialCapital = 10000) {
+  const normalized = (symbol || '').toUpperCase();
+  if (!normalized) throw new Error('symbol required');
+  const rawRows = listPrices(normalized, 2000) as Array<{ date: string; close: number }>;
+  if (!rawRows.length) {
+    throw new Error(`No price data for ${normalized}`);
+  }
+  const rows = startDate ? rawRows.filter(r => r.date >= startDate) : rawRows;
+  if (rows.length < 10) {
+    throw new Error('Not enough data to run backtest');
+  }
+  const points: Pt[] = rows.map(r => ({ date: r.date, close: r.close }));
+  let result;
+  switch (strategy) {
+    case 'momentum':
+      result = backtestSMA(points, 20, 50);
+      break;
+    case 'mean_reversion':
+      result = backtestSMA(points, 5, 20);
+      break;
+    case 'sma_cross':
+    default:
+      result = backtestSMA(points, 10, 20);
+      break;
+  }
+
+  const scale = initialCapital / 10000;
+  const equityRaw = result.equity.length ? result.equity : [10000 * (1 + result.totalReturn)];
+  const equity = equityRaw.map(v => v * scale);
+  const finalCapital = equity[equity.length - 1];
+  const totalReturn = initialCapital > 0 ? (finalCapital / initialCapital) - 1 : result.totalReturn;
+
+  const returns = dailyReturns(equity);
+  const avgReturn = returns.length ? returns.reduce((sum, r) => sum + r, 0) / returns.length : 0;
+  const variance = returns.length ? returns.reduce((sum, r) => sum + Math.pow(r - avgReturn, 2), 0) / returns.length : 0;
+  const stdDev = Math.sqrt(variance);
+  const sharpeRatio = stdDev > 0 ? (avgReturn / stdDev) * Math.sqrt(252) : 0;
+  const dd = maxDrawdown(equity);
+  const sellTrades = result.trades.filter(t => t.type === 'SELL');
+  const wins = sellTrades.filter(t => Number(t.ret) > 0);
+  const winRate = sellTrades.length ? wins.length / sellTrades.length : 0;
+  const tradingDays = rows.length;
+  const years = tradingDays / 252;
+  const annualizedReturn = years > 0 ? Math.pow(1 + totalReturn, 1 / years) - 1 : totalReturn;
+
+  return {
+    symbol: normalized,
+    strategy,
+    total_return: totalReturn,
+    annualized_return: annualizedReturn,
+    sharpe_ratio: sharpeRatio,
+    max_drawdown: dd,
+    win_rate: winRate,
+    total_trades: sellTrades.length,
+    final_capital: finalCapital,
+    equity_curve: equity,
+    trades: result.trades
+  };
+}

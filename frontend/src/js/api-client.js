@@ -199,14 +199,22 @@ window.stockAPI = new StockAPIClient();
 window.stockAPI.getHealth()
   .then(response => {
     console.log('✅ Server connectivity test passed:', response);
-    document.getElementById('server-status').innerHTML = `
+    const statusEl = document.getElementById('server-status');
+    if (!statusEl) {
+      return;
+    }
+    statusEl.innerHTML = `
       <div class="pulse-dot bg-green-500"></div>
       <span class="text-sm text-green-400">Server Online</span>
     `;
   })
   .catch(error => {
     console.error('❌ Server connectivity test failed:', error);
-    document.getElementById('server-status').innerHTML = `
+    const statusEl = document.getElementById('server-status');
+    if (!statusEl) {
+      return;
+    }
+    statusEl.innerHTML = `
       <div class="pulse-dot bg-red-500"></div>
       <span class="text-sm text-red-400">Server Offline</span>
     `;
