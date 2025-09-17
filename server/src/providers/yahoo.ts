@@ -1,11 +1,11 @@
-// Yahoo Finance provider implementation using yahoo-finance2
-// Provides: fetchYahooQuotesBatch, fetchYahooDaily, parseYahooDaily
-// These power the background prefetch (quotes + fallback chart) and rebuild scripts.
+// Yahoo Finance provider implementation using yahoo-finance2 only (v3 class removed)
+// Provides: fetchYahooQuotesBatch, fetchYahooDaily, parseYahooDaily, fetchYahooOptions, parseYahooOptions
 
 import yahooFinance from 'yahoo-finance2';
 import { logger } from '../utils/logger.js';
 
-const yf: any = yahooFinance as any; // alias to bypass TS "this" context issues
+// Simplified: use the default exported function object directly
+let yf: any = (yahooFinance as any);
 
 type QuoteRow = { symbol: string; time: number; price: number };
 
@@ -96,6 +96,55 @@ export function parseYahooDaily(symbol: string, chart: any): Array<{ symbol: str
     return Array.from(map.values()).sort((a, b) => a.date < b.date ? -1 : 1);
   } catch (err) {
     logger.error({ err, symbol }, 'yahoo_parse_daily_failed');
+    return [];
+  }
+}
+
+// Fetch full options chain (all expirations) or a specific expiration date (YYYY-MM-DD) if supplied in opts.date
+export async function fetchYahooOptions(symbol: string, opts: { date?: string; region?: string } = {}): Promise<any> {
+  const sym = symbol.toUpperCase();
+  const region = opts.region || 'US';
+  const req: any = { region };
+  if (opts.date) {
+    try { req.date = new Date(opts.date + 'T00:00:00Z'); } catch {}
+  }
+  // Support both .options and (older) .optionChain
+  try {
+    if (typeof yf.options === 'function') return await yf.options(sym, req);
+    if (typeof yf.optionChain === 'function') return await yf.optionChain(sym, req);
+    throw new Error('options API not available on selected yahoo client');
+  } catch (err) {
+    logger.error({ err, symbol: sym }, 'yahoo_options_failed');
+    throw err;
+  }
+}
+
+// Parse options chain into a lightweight summary: per expiration ATM call/put + counts
+export function parseYahooOptions(chain: any): Array<{ expiration: string; calls: number; puts: number; atmCall?: any; atmPut?: any }> {
+  try {
+    if (!chain) return [];
+    const price = Number(chain?.quote?.regularMarketPrice ?? chain?.quote?.postMarketPrice ?? chain?.quote?.preMarketPrice);
+    const sets: any[] = Array.isArray(chain?.options) ? chain.options : [];
+    const out: Array<{ expiration: string; calls: number; puts: number; atmCall?: any; atmPut?: any }> = [];
+    for (const s of sets) {
+      const exp = s?.expirationDate ? new Date(Number(s.expirationDate)*1000).toISOString().slice(0,10) : 'NA';
+      const calls: any[] = Array.isArray(s?.calls) ? s.calls : [];
+      const puts: any[] = Array.isArray(s?.puts) ? s.puts : [];
+      let atmCall: any; let atmPut: any;
+      if (Number.isFinite(price)) {
+        let bestDiff = Infinity;
+        for (const c of calls) { const d = Math.abs(Number(c.strike) - price); if (d < bestDiff) { bestDiff = d; atmCall = c; } }
+        bestDiff = Infinity;
+        for (const p of puts) { const d = Math.abs(Number(p.strike) - price); if (d < bestDiff) { bestDiff = d; atmPut = p; } }
+      }
+      out.push({ expiration: exp, calls: calls.length, puts: puts.length,
+        atmCall: atmCall ? { strike: atmCall.strike, last: atmCall.lastPrice, iv: atmCall.impliedVolatility, oi: atmCall.openInterest, vol: atmCall.volume, delta: atmCall.delta } : undefined,
+        atmPut: atmPut ? { strike: atmPut.strike, last: atmPut.lastPrice, iv: atmPut.impliedVolatility, oi: atmPut.openInterest, vol: atmPut.volume, delta: atmPut.delta } : undefined
+      });
+    }
+    return out;
+  } catch (err) {
+    logger.error({ err }, 'yahoo_parse_options_failed');
     return [];
   }
 }

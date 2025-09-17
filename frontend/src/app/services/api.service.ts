@@ -347,8 +347,17 @@ export class Api {
     return res.json();
   }
 
+  async ragReindex(symbol: string) {
+    const res = await fetch(`${this.base}/api/rag/reindex/${encodeURIComponent(symbol)}`, { method:'POST' });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+
   agentStream(q: string, symbol?: string) {
     return fetch(`${this.base}/api/agent/stream`, { method:'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ q, symbol }) });
+  }
+  agentStreamAbortable(q: string, symbol: string|undefined, signal: AbortSignal) {
+    return fetch(`${this.base}/api/agent/stream`, { method:'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ q, symbol }), signal });
   }
 
   async portfolio() {
@@ -445,6 +454,14 @@ export class Api {
   }
   async marketStatus() {
     const res = await fetch(`${this.base}/api/marketStatus`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+
+  async mcExtended(symbol: string, opts?: { full?: boolean }) {
+    const url = new URL(`${this.base}/api/mc/extended/${encodeURIComponent(symbol)}`, window.location.origin);
+    if (opts?.full) url.searchParams.set('full','true');
+    const res = await fetch(url.toString());
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   }

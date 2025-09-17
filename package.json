@@ -15,7 +15,7 @@
     "db:schema": "node server/scripts/schema-dump.cjs",
     "db:counts": "node server/scripts/table-counts.cjs",
     "test:fixtures": "npm --prefix server run test:fixtures",
-    "yfinance:all": "python server/scripts/yfinance_fetch.py --all --period=6mo --interval=1d"
+    "yfinance:all": "python server/scripts/yfinance_fetch.py --all --period=ytd --interval=1d"
   },
   "dependencies": {
     "bullmq": "^5.58.5",

@@ -132,6 +132,27 @@
       <div class="badge">Stock • RAG • MCP</div>
       <div class="muted">Demo dashboard (server on <span class="mono">http://localhost:4010</span>)</div>
     </header>
+
+    <div id="app"></div>
+    <!-- New modular entrypoint -->
+    <script type="module" src="/main-refactored.ts"></script>
+    <!-- Legacy scripts retained temporarily (will be pruned) -->
+    <script type="module" src="/top-picks.ts"></script>
+    <script type="module" src="/top-picks-history.ts"></script>
+    <script type="module" src="/live-cards.ts"></script>
+    <script type="module" src="/masonry.ts"></script>
+    <script type="module" src="/json-viewer.ts"></script>
+    <script type="module" src="/top-picks-delta.ts"></script>
+    <script type="module" src="/strategy-lab.ts"></script>
+    <script type="module" src="/predictions.ts"></script>
+    <script type="module" src="/alerts.ts"></script>
+    <script type="module" src="/lib/events.ts"></script>
+    <script type="module" src="/cards/registry.ts"></script>
+    <script type="module" src="/cards/tl-cache.ts"></script>
+    <script type="module" src="/cards/features-stored.ts"></script>
+    <script type="module" src="/provider-health.ts"></script>
+    <script type="module" src="/portfolio.ts"></script>
+    <script type="module" src="/modules/telemetry.ts"></script>
     <div class="container">
       <div class="status-message">
         <h2>Stock MCP Dashboard</h2>
@@ -162,5 +183,6 @@
             '<div style="color: var(--danger); margin-top: 1rem;">❌ Server connection failed</div>';
         });
     </script>
+
   </body>
 </html>

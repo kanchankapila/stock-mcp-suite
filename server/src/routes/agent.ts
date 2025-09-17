@@ -228,3 +228,35 @@ router.post('/agent/ask', (req, res) => {
     return res.status(500).json(ResponseUtils.internalError());
   }
 });
+
+// POST /api/agent/stream { q, symbol }
+router.post('/agent/stream', (req, res) => {
+  try {
+    const q = String(req.body?.q || req.body?.prompt || '').trim();
+    if (!q) { res.status(400).json(ResponseUtils.error('missing_q')); return; }
+    const symbolRaw = String(req.body?.symbol || '').trim();
+    const symbol = symbolRaw ? symbolRaw.toUpperCase() : undefined;
+    const result = buildAnswer(q, symbol);
+    // SSE style streaming
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+    function send(ev: string, data: any) { res.write(`event: ${ev}\n`); res.write(`data: ${JSON.stringify(data)}\n\n`); }
+    const answer: string = result.answer || '';
+    const lines = answer.split(/\n/);
+    // Stream line-by-line as tokens (could be further chunked)
+    for (const line of lines) {
+      send('token', { text: line + '\n' });
+    }
+    send('final', { answer: answer, intents: result.intents, data: result.data });
+    res.write('event: done\n'); res.write('data: {}\n\n');
+    res.end();
+  } catch (err) {
+    try {
+      res.write(`event: error\n`);
+      res.write(`data: ${JSON.stringify({ error: 'internal_error' })}\n\n`);
+    } catch {}
+    try { res.end(); } catch {}
+  }
+});

@@ -26,6 +26,8 @@ import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 import { ResponseUtils } from './shared/utils/response.utils.js';
 import { router as agentRoutes } from './routes/agent.js';
 import { startYahooPrefetchFromStocklist } from './providers/prefetch.js';
+import { router as moneycontrolRoutes } from './routes/moneycontrol.js';
+import { router as mcLiteRoutes } from './routes/mc.js';
 
 const app = express();
 app.use(cors());
@@ -69,6 +71,8 @@ app.use('/api', sourcesRoutes);
 app.use('/api', portfolioRoutes);
 app.use('/api', providersRoutes);
 app.use('/api', agentRoutes);
+app.use('/api/moneycontrol', moneycontrolRoutes);
+app.use('/api/mc', mcLiteRoutes);
 attachMcp(app);
 
 // 404 handler
