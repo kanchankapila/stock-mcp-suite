@@ -6,6 +6,15 @@ import rateLimit from 'express-rate-limit';
 import slowDown from 'express-slow-down';
 import { Request, Response, NextFunction } from 'express';
 
+// Add declaration merge for express-rate-limit typings
+declare global {
+  namespace Express {
+    interface Request {
+      rateLimit?: { resetTime?: number };
+    }
+  }
+}
+
 // Advanced caching system with TTL and memory management
 export class AdvancedCacheManager {
   private caches: Map<string, LRUCache<string, any>>;
@@ -293,14 +302,22 @@ export function createRateLimiters() {
   });
 
   // Slow down middleware for progressive delays
+<<<<<<< HEAD
   const slowDownMiddleware = slowDown({
+=======
+  const slowDownMw = slowDown({
+>>>>>>> 36da72d14c339360afd24c85165c6798c73619f1
     windowMs: 15 * 60 * 1000, // 15 minutes
     delayAfter: 500, // Allow 500 requests per 15 minutes at full speed
     delayMs: 100, // Add 100ms delay per request after delayAfter
     maxDelayMs: 2000, // Max delay of 2 seconds
   });
 
+<<<<<<< HEAD
   return { generalLimiter, strictLimiter, slowDown: slowDownMiddleware };
+=======
+  return { generalLimiter, strictLimiter, slowDown: slowDownMw };
+>>>>>>> 36da72d14c339360afd24c85165c6798c73619f1
 }
 
 // Request optimization middleware
@@ -448,11 +465,19 @@ export function setupPerformanceMiddleware(app: any) {
   app.use(createCompressionMiddleware());
   
   // Rate limiting
+<<<<<<< HEAD
   const { generalLimiter, strictLimiter, slowDown: slowDownMiddleware } = createRateLimiters();
   app.use('/api', generalLimiter);
   app.use('/api/ingest', strictLimiter);
   app.use('/api/backtest', strictLimiter);
   app.use(slowDownMiddleware);
+=======
+  const { generalLimiter, strictLimiter, slowDown: slowDownMw } = createRateLimiters();
+  app.use('/api', generalLimiter);
+  app.use('/api/ingest', strictLimiter);
+  app.use('/api/backtest', strictLimiter);
+  app.use(slowDownMw);
+>>>>>>> 36da72d14c339360afd24c85165c6798c73619f1
   
   // Request optimization
   app.use(createRequestOptimizer());
