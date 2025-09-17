@@ -8,7 +8,7 @@ export class PerformanceCache {
   private cache = new Map<string, { data: any; expires: number; accessCount: number; lastAccessed: number }>();
   private maxSize: number;
   private defaultTtl: number;
-  private cleanupInterval: NodeJS.Timer;
+  private cleanupInterval: NodeJS.Timeout;
   private stats = {
     hits: 0,
     misses: 0,
@@ -149,7 +149,7 @@ export class PerformanceCache {
 
   destroy(): void {
     if (this.cleanupInterval) {
-      clearInterval(this.cleanupInterval);
+      clearTimeout(this.cleanupInterval);
     }
     this.cache.clear();
   }
