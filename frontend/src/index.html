@@ -1,9 +1,11 @@
-﻿<!doctype html>
+<!doctype html>
 <html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Stock RAG MCP Dashboard</title>\\n <link rel=\stylesheet\ href=\/src/styles/tokens.css\ />\\n <link rel=\stylesheet\ href=\/src/styles/layout.css\ />
+    <title>Stock RAG MCP Dashboard</title>
+    <link rel="stylesheet" href="/src/styles/tokens.css" />
+    <link rel="stylesheet" href="/src/styles/layout.css" />
     <style>
       * { box-sizing: border-box; }
       :root {
@@ -117,13 +119,20 @@
         padding: 16px;
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
       }
+      
+      .status-message {
+        text-align: center;
+        padding: 2rem;
+        color: var(--muted);
+      }
     </style>
   </head>
   <body>
     <header>
-      <div class="badge">Stock â€¢ RAG â€¢ MCP</div>
+      <div class="badge">Stock • RAG • MCP</div>
       <div class="muted">Demo dashboard (server on <span class="mono">http://localhost:4010</span>)</div>
     </header>
+
     <div id="app"></div>
     <!-- New modular entrypoint -->
     <script type="module" src="/main-refactored.ts"></script>
@@ -144,10 +153,36 @@
     <script type="module" src="/provider-health.ts"></script>
     <script type="module" src="/portfolio.ts"></script>
     <script type="module" src="/modules/telemetry.ts"></script>
+    <div class="container">
+      <div class="status-message">
+        <h2>Stock MCP Dashboard</h2>
+        <p>Welcome to the Stock Market Analysis Platform</p>
+        <p><strong>Note:</strong> The modern visual dashboard is available in the <code>performance-optimization</code> branch.</p>
+        <p>Current main branch provides basic functionality.</p>
+      </div>
+    </div>
+    
+    <!-- Basic scripts for compatibility -->
+    <script type="module">
+      console.log('Stock MCP Dashboard - Main Branch');
+      console.log('For the full visual dashboard, check the performance-optimization branch');
+      
+      // Basic API connectivity test
+      fetch('/api/health')
+        .then(response => response.json())
+        .then(data => {
+          console.log('Server health check:', data);
+          if (data.ok) {
+            document.querySelector('.status-message').innerHTML += 
+              '<div style="color: var(--success); margin-top: 1rem;">✅ Server is running successfully</div>';
+          }
+        })
+        .catch(error => {
+          console.error('Server connectivity issue:', error);
+          document.querySelector('.status-message').innerHTML += 
+            '<div style="color: var(--danger); margin-top: 1rem;">❌ Server connection failed</div>';
+        });
+    </script>
+
   </body>
 </html>
-
-
-
-
-

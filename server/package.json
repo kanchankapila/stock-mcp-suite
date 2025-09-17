@@ -16,7 +16,13 @@
     "db:rebuild": "node --loader ts-node/esm scripts/rebuild.ts",
     "alpha:fetch": "node --loader ts-node/esm scripts/alpha-fetch.ts AAPL",
     "test:ingestion": "node tests/ingestion-mock.cjs",
-    "yahoo:options": "tsx scripts/yahoo-options.ts"
+
+ 
+    "yahoo:options": "tsx scripts/yahoo-options.ts",
+    "yahoo:v3:all": "tsx scripts/yahoo-v3-all.ts",
+    "postinstall": "npm run build",
+    "clean": "rm -rf dist"
+
   },
   "dependencies": {
     "@huggingface/inference": "^4.7.1",
@@ -43,10 +49,28 @@
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^10.9.1",
     "@types/express": "^4.17.21",
+
     "@types/node": "^24.5.0",
+
     "@types/node-cron": "^3.0.11",
+    "@types/cors": "^2.8.17",
+    "@types/ws": "^8.5.12",
+    "@types/pg": "^8.11.10",
+    "@types/better-sqlite3": "^7.6.11",
     "ts-node": "^10.9.2",
     "tsx": "^4.7.0",
     "typescript": "^5.6.2"
-  }
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "stock-analysis",
+    "mcp-server",
+    "financial-data",
+    "api",
+    "typescript"
+  ],
+  "author": "Stock MCP Suite",
+  "license": "MIT"
 }
