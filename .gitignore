@@ -23,3 +23,4 @@ ml-svc/__pycache__/app.cpython-311.pyc
 server/stock.db
 server/stock.db-shm
 server/stock.db-wal
+.env
